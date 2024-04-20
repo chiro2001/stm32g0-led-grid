@@ -591,6 +591,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "icn2037"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -814,6 +821,7 @@ dependencies = [
  "embedded-hal 1.0.0",
  "futures",
  "heapless 0.8.0",
+ "icn2037",
  "panic-probe",
  "portable-atomic",
 ]

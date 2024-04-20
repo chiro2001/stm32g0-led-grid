@@ -1,3 +1,4 @@
+workspace = { members = ["icn2037"] }
 [package]
 name = "stm32g0-led-grid"
 version = "0.1.0"
@@ -46,6 +47,8 @@ futures = { version = "0.3.17", default-features = false, features = [
 ] }
 heapless = { version = "0.8", default-features = false }
 portable-atomic = { version = "1.5", features = ["unsafe-assume-single-core"] }
+
+icn2037 = { path = "icn2037" }
 
 [profile.release]
 debug = 2
