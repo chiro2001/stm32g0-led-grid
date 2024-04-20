@@ -49,6 +49,7 @@ heapless = { version = "0.8", default-features = false }
 portable-atomic = { version = "1.5", features = ["unsafe-assume-single-core"] }
 
 icn2037 = { path = "icn2037" }
+embedded-graphics = "0.8.1"
 
 [profile.release]
 debug = 2

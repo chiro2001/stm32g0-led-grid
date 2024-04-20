@@ -5,6 +5,7 @@ use embedded_hal::{delay::DelayNs, digital::OutputPin};
 #[derive(Debug)]
 pub enum Error {
     PinError,
+    DispError,
 }
 
 pub struct DisplayConfig {
@@ -36,7 +37,7 @@ pub struct ICN2037<'d, DIN, CLK, OE, LE, DELAY> {
     pub buffer: &'d mut [u16],
 }
 
-const DELAY_US: u32 = 1;
+const DELAY_US: u32 = 0;
 
 impl<'d, DIN, CLK, OE, LE, DELAY> ICN2037<'d, DIN, CLK, OE, LE, DELAY>
 where
@@ -83,32 +84,30 @@ where
                 })
                 .map_err(|_| Error::PinError)?;
             self.clk.set_high().map_err(|_| Error::PinError)?;
-            self.delay.delay_us(DELAY_US);
+            // self.delay.delay_us(DELAY_US);
             self.clk.set_low().map_err(|_| Error::PinError)?;
-            self.delay.delay_us(DELAY_US);
+            // self.delay.delay_us(DELAY_US);
         }
         // latch
-        self.delay.delay_us(DELAY_US);
+        // self.delay.delay_us(DELAY_US);
         self.le.set_high().map_err(|_| Error::PinError)?;
-        self.delay.delay_us(DELAY_US);
+        // self.delay.delay_us(DELAY_US);
         self.le.set_low().map_err(|_| Error::PinError)?;
-        self.delay.delay_us(DELAY_US);
+        // self.delay.delay_us(DELAY_US);
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<(), Error> {
-        self.oe.set_high().map_err(|_| Error::PinError)?;
-        self.delay.delay_us(DELAY_US);
+        // self.oe.set_high().map_err(|_| Error::PinError)?;
+        // self.delay.delay_us(DELAY_US);
 
-        // for i in 0..(self.buffer.len()).min(self.config.width * self.config.height / 8 / 2) {
-        //     self.write_16b(self.buffer[i])?;
-        // }
         for i in 0..self.buffer.len() {
             self.write_16b(self.buffer[i])?;
         }
-
+        self.oe.set_high().map_err(|_| Error::PinError)?;
+        // self.delay.delay_us(DELAY_US);
         self.oe.set_low().map_err(|_| Error::PinError)?;
-        self.delay.delay_us(DELAY_US);
+        // self.delay.delay_us(DELAY_US);
         Ok(())
     }
 
@@ -117,7 +116,46 @@ where
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, value: bool) {
+        if x >= self.config.width || y >= self.config.height {
+            return;
+        }
         let (idx, offset) = (self.config.map_pixel)(&self.config, x, y);
         self.buffer[idx] = (self.buffer[idx] & !(1 << offset)) | ((value as u16) << offset);
+    }
+}
+
+impl<'d, DIN, CLK, OE, LE, DELAY> embedded_graphics_core::geometry::OriginDimensions
+    for ICN2037<'d, DIN, CLK, OE, LE, DELAY>
+{
+    fn size(&self) -> embedded_graphics_core::prelude::Size {
+        embedded_graphics_core::prelude::Size::new(
+            self.config.width as u32,
+            self.config.height as u32,
+        )
+    }
+}
+
+impl<'d, DIN, CLK, OE, LE, DELAY> embedded_graphics_core::draw_target::DrawTarget
+    for ICN2037<'d, DIN, CLK, OE, LE, DELAY>
+where
+    DIN: OutputPin,
+    CLK: OutputPin,
+    OE: OutputPin,
+    LE: OutputPin,
+    DELAY: DelayNs,
+{
+    type Color = embedded_graphics_core::pixelcolor::BinaryColor;
+
+    type Error = Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = embedded_graphics_core::prelude::Pixel<Self::Color>>,
+    {
+        let iter = pixels.into_iter();
+        for pixel in iter {
+            self.set_pixel(pixel.0.x as usize, pixel.0.y as usize, pixel.1.is_on());
+        }
+        Ok(())
     }
 }

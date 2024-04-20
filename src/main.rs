@@ -5,6 +5,14 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_time::{Delay, Timer};
+use embedded_graphics::{
+    geometry::{Point, Size},
+    mono_font::{ascii, MonoTextStyleBuilder},
+    pixelcolor::BinaryColor,
+    primitives::{Primitive, PrimitiveStyle, Rectangle},
+    text::{Text, TextStyleBuilder},
+    Drawable,
+};
 use {defmt_rtt as _, panic_probe as _};
 
 // DIN = PB5
@@ -51,29 +59,34 @@ async fn main(_spawner: Spawner) {
 
     icn.start().unwrap();
 
+    let mut cnt = 0;
+
     loop {
         icn.clear();
-        // for x in 0..25 {
-        // for y in 0..16 {
-        //     icn.set_pixel(y, y, true);
-        // }
-        // }
-
-        for y in 0..16 {
-            icn.set_pixel(y, y, true);
-            icn.flush().unwrap();
-            // Timer::after_millis(500).await;
-        }
-        // for k in 0..25 {
-        //     icn.clear();
-        //     for i in 0..16 {
-        //         icn.buffer[k] |= 1 << i;
-        //         icn.flush().unwrap();
-        //         Timer::after_millis(100).await;
-        //     }
-        //     Timer::after_millis(500).await;
-        // }
+        Text::with_alignment(
+            "Test",
+            Point::new(0, cnt),
+            MonoTextStyleBuilder::new()
+                // .font(&ascii::FONT_5X8)
+                .font(&ascii::FONT_6X13_BOLD)
+                .text_color(BinaryColor::On)
+                .build(),
+            embedded_graphics::text::Alignment::Left,
+        )
+        .draw(&mut icn)
+        .unwrap();
+        // Rectangle::new(Point::zero(), Size::new(16, 16))
+        //     .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        //     .draw(&mut icn)
+        //     .unwrap();
+        // icn.set_pixel(0, 0, true);
         icn.flush().unwrap();
-        Timer::after_millis(1000).await;
+        // Timer::after_millis(1000).await;
+
+        cnt = cnt + 1;
+        if cnt >= 16 + 6 {
+            cnt = 0;
+        }
+        // Timer::after_millis(10).await;
     }
 }
