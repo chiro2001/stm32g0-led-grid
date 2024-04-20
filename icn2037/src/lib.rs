@@ -1,10 +1,12 @@
 #![no_std]
 
 use embedded_hal::digital::OutputPin;
+use embedded_hal::spi::SpiBus;
 
 #[derive(Debug)]
 pub enum Error {
     PinError,
+    BusError,
     DispError,
 }
 
@@ -27,33 +29,23 @@ impl DisplayConfig {
     }
 }
 
-pub struct ICN2037<'d, DIN, CLK, OE, LE> {
-    din: DIN,
-    clk: CLK,
+pub struct ICN2037<'d, SPI, OE, LE> {
+    spi: SPI,
     oe: OE,
     le: LE,
     config: DisplayConfig,
     pub buffer: &'d mut [u16],
 }
 
-impl<'d, DIN, CLK, OE, LE> ICN2037<'d, DIN, CLK, OE, LE>
+impl<'d, SPI, OE, LE> ICN2037<'d, SPI, OE, LE>
 where
-    DIN: OutputPin,
-    CLK: OutputPin,
+    SPI: SpiBus,
     OE: OutputPin,
     LE: OutputPin,
 {
-    pub fn new(
-        din: DIN,
-        clk: CLK,
-        oe: OE,
-        le: LE,
-        config: DisplayConfig,
-        buffer: &'d mut [u16],
-    ) -> Self {
+    pub fn new(spi: SPI, oe: OE, le: LE, config: DisplayConfig, buffer: &'d mut [u16]) -> Self {
         Self {
-            din,
-            clk,
+            spi,
             oe,
             le,
             config,
@@ -68,40 +60,20 @@ where
     }
 
     pub fn write_16b(&mut self, data: u16) -> Result<(), Error> {
-        // use msb
-        for i in (0..16).rev() {
-            self.din
-                .set_state(if data & (1 << i) != 0 {
-                    embedded_hal::digital::PinState::High
-                } else {
-                    embedded_hal::digital::PinState::Low
-                })
-                .map_err(|_| Error::PinError)?;
-            self.clk.set_high().map_err(|_| Error::PinError)?;
-            // self.delay.delay_us(DELAY_US);
-            self.clk.set_low().map_err(|_| Error::PinError)?;
-            // self.delay.delay_us(DELAY_US);
-        }
+        let buf = [(data >> 8) as u8, (data & 0xff) as u8];
+        self.spi.write(&buf).map_err(|_| Error::BusError)?;
         // latch
-        // self.delay.delay_us(DELAY_US);
         self.le.set_high().map_err(|_| Error::PinError)?;
-        // self.delay.delay_us(DELAY_US);
         self.le.set_low().map_err(|_| Error::PinError)?;
-        // self.delay.delay_us(DELAY_US);
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<(), Error> {
-        // self.oe.set_high().map_err(|_| Error::PinError)?;
-        // self.delay.delay_us(DELAY_US);
-
         for i in 0..self.buffer.len() {
             self.write_16b(self.buffer[i])?;
         }
         self.oe.set_high().map_err(|_| Error::PinError)?;
-        // self.delay.delay_us(DELAY_US);
         self.oe.set_low().map_err(|_| Error::PinError)?;
-        // self.delay.delay_us(DELAY_US);
         Ok(())
     }
 
@@ -118,8 +90,8 @@ where
     }
 }
 
-impl<'d, DIN, CLK, OE, LE> embedded_graphics_core::geometry::OriginDimensions
-    for ICN2037<'d, DIN, CLK, OE, LE>
+impl<'d, SPI, OE, LE> embedded_graphics_core::geometry::OriginDimensions
+    for ICN2037<'d, SPI, OE, LE>
 {
     fn size(&self) -> embedded_graphics_core::prelude::Size {
         embedded_graphics_core::prelude::Size::new(
@@ -129,11 +101,9 @@ impl<'d, DIN, CLK, OE, LE> embedded_graphics_core::geometry::OriginDimensions
     }
 }
 
-impl<'d, DIN, CLK, OE, LE> embedded_graphics_core::draw_target::DrawTarget
-    for ICN2037<'d, DIN, CLK, OE, LE>
+impl<'d, SPI, OE, LE> embedded_graphics_core::draw_target::DrawTarget for ICN2037<'d, SPI, OE, LE>
 where
-    DIN: OutputPin,
-    CLK: OutputPin,
+    SPI: SpiBus,
     OE: OutputPin,
     LE: OutputPin,
 {

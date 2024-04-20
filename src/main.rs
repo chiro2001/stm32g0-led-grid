@@ -3,7 +3,12 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::{
+    dma::NoDma,
+    gpio::{Level, Output, Speed},
+    spi::{self, Spi},
+    time::Hertz,
+};
 use embassy_time::Delay;
 use embedded_graphics::{
     geometry::Point,
@@ -28,16 +33,16 @@ async fn main(_spawner: Spawner) {
 
     info!("start");
 
-    let din = Output::new(p.PB5, Level::Low, Speed::VeryHigh);
-    let clk = Output::new(p.PB3, Level::Low, Speed::VeryHigh);
     let oe = Output::new(p.PA7, Level::Low, Speed::VeryHigh);
     let le = Output::new(p.PB1, Level::Low, Speed::VeryHigh);
+    let mut spi_config: spi::Config = Default::default();
+    spi_config.frequency = Hertz::mhz(16);
+    let spi = Spi::new_txonly(p.SPI1, p.PB3, p.PB5, NoDma, NoDma, spi_config);
 
     let mut buffer = [0u16; 25];
     let (width, height) = (25, 16);
     let mut icn = icn2037::ICN2037::new(
-        din,
-        clk,
+        spi,
         oe,
         le,
         icn2037::DisplayConfig::new(width, height, |config, x, y| {
