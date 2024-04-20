@@ -4,15 +4,15 @@
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_time::{Delay, Timer};
+use embassy_time::Delay;
 use embedded_graphics::{
-    geometry::{Point, Size},
+    geometry::Point,
     mono_font::{ascii, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
-    primitives::{Primitive, PrimitiveStyle, Rectangle},
-    text::{Text, TextStyleBuilder},
+    text::Text,
     Drawable,
 };
+use embedded_hal::delay::DelayNs;
 use {defmt_rtt as _, panic_probe as _};
 
 // DIN = PB5
@@ -40,7 +40,6 @@ async fn main(_spawner: Spawner) {
         clk,
         oe,
         le,
-        &mut delay,
         icn2037::DisplayConfig::new(width, height, |config, x, y| {
             if x >= config.width || y >= config.height {
                 return (0, 0);
@@ -75,18 +74,11 @@ async fn main(_spawner: Spawner) {
         )
         .draw(&mut icn)
         .unwrap();
-        // Rectangle::new(Point::zero(), Size::new(16, 16))
-        //     .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        //     .draw(&mut icn)
-        //     .unwrap();
-        // icn.set_pixel(0, 0, true);
         icn.flush().unwrap();
-        // Timer::after_millis(1000).await;
-
         cnt = cnt + 1;
         if cnt >= 16 + 6 {
             cnt = 0;
         }
-        // Timer::after_millis(10).await;
+        delay.delay_ms(0);
     }
 }

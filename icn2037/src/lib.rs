@@ -1,6 +1,6 @@
 #![no_std]
 
-use embedded_hal::{delay::DelayNs, digital::OutputPin};
+use embedded_hal::digital::OutputPin;
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,32 +27,27 @@ impl DisplayConfig {
     }
 }
 
-pub struct ICN2037<'d, DIN, CLK, OE, LE, DELAY> {
+pub struct ICN2037<'d, DIN, CLK, OE, LE> {
     din: DIN,
     clk: CLK,
     oe: OE,
     le: LE,
-    delay: DELAY,
     config: DisplayConfig,
     pub buffer: &'d mut [u16],
 }
 
-const DELAY_US: u32 = 0;
-
-impl<'d, DIN, CLK, OE, LE, DELAY> ICN2037<'d, DIN, CLK, OE, LE, DELAY>
+impl<'d, DIN, CLK, OE, LE> ICN2037<'d, DIN, CLK, OE, LE>
 where
     DIN: OutputPin,
     CLK: OutputPin,
     OE: OutputPin,
     LE: OutputPin,
-    DELAY: DelayNs,
 {
     pub fn new(
         din: DIN,
         clk: CLK,
         oe: OE,
         le: LE,
-        delay: DELAY,
         config: DisplayConfig,
         buffer: &'d mut [u16],
     ) -> Self {
@@ -61,7 +56,6 @@ where
             clk,
             oe,
             le,
-            delay,
             config,
             buffer,
         }
@@ -124,8 +118,8 @@ where
     }
 }
 
-impl<'d, DIN, CLK, OE, LE, DELAY> embedded_graphics_core::geometry::OriginDimensions
-    for ICN2037<'d, DIN, CLK, OE, LE, DELAY>
+impl<'d, DIN, CLK, OE, LE> embedded_graphics_core::geometry::OriginDimensions
+    for ICN2037<'d, DIN, CLK, OE, LE>
 {
     fn size(&self) -> embedded_graphics_core::prelude::Size {
         embedded_graphics_core::prelude::Size::new(
@@ -135,14 +129,13 @@ impl<'d, DIN, CLK, OE, LE, DELAY> embedded_graphics_core::geometry::OriginDimens
     }
 }
 
-impl<'d, DIN, CLK, OE, LE, DELAY> embedded_graphics_core::draw_target::DrawTarget
-    for ICN2037<'d, DIN, CLK, OE, LE, DELAY>
+impl<'d, DIN, CLK, OE, LE> embedded_graphics_core::draw_target::DrawTarget
+    for ICN2037<'d, DIN, CLK, OE, LE>
 where
     DIN: OutputPin,
     CLK: OutputPin,
     OE: OutputPin,
     LE: OutputPin,
-    DELAY: DelayNs,
 {
     type Color = embedded_graphics_core::pixelcolor::BinaryColor;
 
