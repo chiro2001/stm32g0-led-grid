@@ -16,14 +16,15 @@ use embassy_sync::{
 };
 use embassy_time::{Delay, Timer};
 use embedded_graphics::{
+    draw_target::DrawTarget,
     geometry::Point,
     mono_font::{ascii, MonoTextStyleBuilder},
-    pixelcolor::BinaryColor,
+    pixelcolor::{BinaryColor, Gray4},
     text::Text,
-    Drawable,
+    Drawable, Pixel,
 };
 use embedded_hal::delay::DelayNs;
-use icn2037::{ICN2037Device, ICN2037Message};
+use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -34,9 +35,11 @@ use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let p = embassy_stm32::init(Default::default());
+    let mut config: embassy_stm32::Config = Default::default();
+    config.rcc.mux = embassy_stm32::rcc::ClockSrc::PLL(Default::default());
+    let p = embassy_stm32::init(config);
 
-    // let mut delay = Delay {};
+    let mut delay = Delay {};
 
     info!("start");
 
@@ -73,9 +76,15 @@ async fn main(spawner: Spawner) {
     icn.set_pixel_gray(0, 0, 1);
     let icn_channel = &*make_static!(Channel::new());
     let (tx, rx) = (icn_channel.sender(), icn_channel.receiver());
+
+    let sender = ICN2037Sender {
+        config: icn.config.clone(),
+        sender: tx,
+    };
+
     spawner.spawn(daemon_task(icn, rx)).unwrap();
 
-    let mut cnt = 0u8;
+    let mut cnt = 0;
 
     // for k in 0..25 {
     //     for y in 0..16 {
@@ -100,62 +109,64 @@ async fn main(spawner: Spawner) {
     //     info!("cnt = {}", cnt);
     // }
 
-    let mut d = true;
+    // let mut d = true;
+    // loop {
+    //     if d {
+    //         cnt += 1;
+    //     } else {
+    //         cnt -= 1;
+    //     }
+    //     if cnt == 0 {
+    //         d = true;
+    //     }
+    //     if cnt == 15 {
+    //         d = false;
+    //     }
+    //     tx.send(ICN2037Message::SetPixel((0, 0, cnt))).await;
+    //     Timer::after_millis(100).await;
+    // }
+
+    let mut icn = sender;
     loop {
-        if d {
-            cnt += 1;
-        } else {
-            cnt -= 1;
+        icn.clear(Default::default()).unwrap();
+        Text::with_alignment(
+            "Test",
+            Point::new(0, cnt),
+            MonoTextStyleBuilder::new()
+                // .font(&ascii::FONT_5X8)
+                .font(&ascii::FONT_6X13_BOLD)
+                .text_color(Gray4::new(15))
+                .build(),
+            embedded_graphics::text::Alignment::Left,
+        )
+        .draw(&mut icn)
+        .unwrap();
+        Text::with_alignment(
+            "Test",
+            Point::new(0, cnt + 16),
+            MonoTextStyleBuilder::new()
+                // .font(&ascii::FONT_5X8)
+                .font(&ascii::FONT_6X13_BOLD)
+                .text_color(Gray4::new(1))
+                .build(),
+            embedded_graphics::text::Alignment::Left,
+        )
+        .draw(&mut icn)
+        .unwrap();
+        // Pixel(Point::zero(), Gray4::new(cnt))
+        //     .draw(&mut icn)
+        //     .unwrap();
+        // tx.send(ICN2037Message::SetPixel((0, 0, cnt))).await;
+        cnt = cnt + 1;
+        if cnt >= 15 {
+            cnt = 0;
         }
-        if cnt == 0 {
-            d = true;
-        }
-        if cnt == 15 {
-            d = false;
-        }
-        tx.send(ICN2037Message::SetPixel((0, 0, cnt))).await;
+        // delay.delay_ms(200);
         Timer::after_millis(100).await;
     }
-
-    // loop {
-    //     icn.clear();
-    //     Text::with_alignment(
-    //         "Test",
-    //         Point::new(0, cnt),
-    //         MonoTextStyleBuilder::new()
-    //             // .font(&ascii::FONT_5X8)
-    //             .font(&ascii::FONT_6X13_BOLD)
-    //             .text_color(BinaryColor::On)
-    //             .build(),
-    //         embedded_graphics::text::Alignment::Left,
-    //     )
-    //     .draw(&mut icn)
-    //     .unwrap();
-    //     Text::with_alignment(
-    //         "Test",
-    //         Point::new(0, cnt + 16),
-    //         MonoTextStyleBuilder::new()
-    //             // .font(&ascii::FONT_5X8)
-    //             .font(&ascii::FONT_6X13_BOLD)
-    //             .text_color(BinaryColor::On)
-    //             .build(),
-    //         embedded_graphics::text::Alignment::Left,
-    //     )
-    //     .draw(&mut icn)
-    //     .unwrap();
-    //     icn.flush().unwrap();
-    //     cnt = cnt + 1;
-    //     if cnt >= 15 {
-    //         cnt = 0;
-    //     }
-    //     delay.delay_ms(200);
-    // }
 }
 
 #[embassy_executor::task]
-async fn daemon_task(
-    dev: impl ICN2037Device + 'static,
-    receiver: Receiver<'static, NoopRawMutex, ICN2037Message, 32>,
-) {
+async fn daemon_task(dev: impl ICN2037Device + 'static, receiver: ICN2037Receiver) {
     dev.task(receiver).await.unwrap();
 }

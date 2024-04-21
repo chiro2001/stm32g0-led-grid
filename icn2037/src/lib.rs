@@ -3,8 +3,10 @@
 use core::future::Future;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::Receiver;
-use embassy_time::Timer;
+use embassy_sync::channel::{Receiver, Sender};
+use embassy_time::{Delay, Timer};
+use embedded_graphics_core::pixelcolor::IntoStorage;
+use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiBus;
 
@@ -16,6 +18,7 @@ pub enum Error {
     BufferError,
 }
 
+#[derive(Debug, Clone)]
 pub struct DisplayConfig {
     pub width: usize,
     pub height: usize,
@@ -39,7 +42,7 @@ pub struct ICN2037<'d, SPI, OE, LE> {
     spi: SPI,
     oe: OE,
     le: LE,
-    config: DisplayConfig,
+    pub config: DisplayConfig,
     pub buffer: &'d mut [u16],
 }
 
@@ -108,14 +111,12 @@ where
         }
     }
 
-    pub async fn task_impl(
-        mut self,
-        receiver: Receiver<'static, NoopRawMutex, ICN2037Message, 32>,
-    ) -> Result<(), Error> {
+    pub async fn task_impl(mut self, receiver: ICN2037Receiver) -> Result<(), Error> {
         loop {
             let msg = receiver.try_receive();
             match msg {
                 Ok(msg) => {
+                    // defmt::info!("recv msg {}", msg);
                     match msg {
                         ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
                     }
@@ -128,8 +129,11 @@ where
                         self.flush(k * frame_sz)?;
                     }
                     Timer::after_ticks(0).await;
+                    // Timer::after_millis(100).await;
                 }
             }
+            // Timer::after_ticks(0).await;
+            // Timer::after_millis(100).await;
         }
     }
 }
@@ -167,11 +171,54 @@ where
     }
 }
 
+pub const BUFFER_SZ: usize = 1024;
+pub type ICN2037Receiver = Receiver<'static, NoopRawMutex, ICN2037Message, BUFFER_SZ>;
+pub struct ICN2037Sender {
+    pub config: DisplayConfig,
+    pub sender: Sender<'static, NoopRawMutex, ICN2037Message, BUFFER_SZ>,
+}
+
+impl embedded_graphics_core::geometry::OriginDimensions for ICN2037Sender {
+    fn size(&self) -> embedded_graphics_core::prelude::Size {
+        embedded_graphics_core::prelude::Size::new(
+            self.config.width as u32,
+            self.config.height as u32,
+        )
+    }
+}
+
+impl embedded_graphics_core::draw_target::DrawTarget for ICN2037Sender {
+    type Color = embedded_graphics_core::pixelcolor::Gray4;
+
+    type Error = Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = embedded_graphics_core::prelude::Pixel<Self::Color>>,
+    {
+        let iter = pixels.into_iter();
+        for pixel in iter {
+            let msg = ICN2037Message::SetPixel((
+                pixel.0.x as usize,
+                pixel.0.y as usize,
+                pixel.1.into_storage() as u8,
+            ));
+            let r = self.sender.try_send(msg);
+            match r {
+                Ok(_) => {}
+                Err(e) => match e {
+                    embassy_sync::channel::TrySendError::Full(_) => {
+                        defmt::warn!("full buffer! {}", e);
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+}
+
 pub trait ICN2037Device {
-    fn task(
-        self,
-        receiver: Receiver<'static, NoopRawMutex, ICN2037Message, 32>,
-    ) -> impl Future<Output = Result<(), Error>>;
+    fn task(self, receiver: ICN2037Receiver) -> impl Future<Output = Result<(), Error>>;
 }
 impl<'d, SPI, OE, LE> ICN2037Device for ICN2037<'d, SPI, OE, LE>
 where
@@ -179,10 +226,7 @@ where
     OE: OutputPin,
     LE: OutputPin,
 {
-    fn task(
-        self,
-        receiver: Receiver<'static, NoopRawMutex, ICN2037Message, 32>,
-    ) -> impl Future<Output = Result<(), Error>> {
+    fn task(self, receiver: ICN2037Receiver) -> impl Future<Output = Result<(), Error>> {
         self.task_impl(receiver)
     }
 }
@@ -206,6 +250,8 @@ const LUT16: [[u8; 16]; 16] = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // 15
 ];
 
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ICN2037Message {
     SetPixel((usize, usize, u8)),
 }
