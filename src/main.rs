@@ -39,14 +39,16 @@ pub struct LifeGame<const W: usize, const H: usize> {
     state_next: [[CellState; H]; W],
     boarder_policy: BoarderPolicy,
     sender: ICN2037Sender,
+    fade_time_ms: u64,
 }
 impl<const W: usize, const H: usize> LifeGame<W, H> {
-    pub fn new(sender: ICN2037Sender) -> Self {
+    pub fn new(sender: ICN2037Sender, fade_time: u64) -> Self {
         Self {
             state: [[Default::default(); H]; W],
             state_next: [[Default::default(); H]; W],
             boarder_policy: Default::default(),
             sender,
+            fade_time_ms: fade_time,
         }
     }
     fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
@@ -141,23 +143,11 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
             CellState::Dead
         };
     }
-}
-
-impl LifeGame<25, 16> {
-    pub async fn draw(&'static mut self) {
-        // static mut BUFFER: [[u8; 16]; 25] = [[0u8; 16]; 25];
+    pub async fn draw(&mut self) {
         for k in 0..16 {
             for x in 0..25 {
                 for y in 0..16 {
                     let (from, to) = (self.state[x][y], self.state_next[x][y]);
-                    // unsafe {
-                    //     BUFFER[x][y] = match (from, to) {
-                    //         (CellState::Dead, CellState::Alive) => k,
-                    //         (CellState::Alive, CellState::Dead) => 15 - k,
-                    //         (CellState::Alive, CellState::Alive) => 15,
-                    //         (CellState::Dead, CellState::Dead) => 0,
-                    //     }
-                    // }
                     let v = match (from, to) {
                         (CellState::Dead, CellState::Alive) => Some(k),
                         (CellState::Alive, CellState::Dead) => Some(15 - k),
@@ -170,9 +160,7 @@ impl LifeGame<25, 16> {
                     }
                 }
             }
-            // let msg = ICN2037Message::PixelsFrame(unsafe { &BUFFER });
-            // self.sender.sender.send(msg).await;
-            Timer::after_millis(20).await;
+            Timer::after_millis(self.fade_time_ms / 16).await;
         }
     }
 }
@@ -233,34 +221,24 @@ async fn main(spawner: Spawner) {
 
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
-    static mut GAME: MaybeUninit<LifeGame<25, 16>> = MaybeUninit::uninit();
-    unsafe {
-        *GAME.as_mut_ptr() = LifeGame::<25, 16>::new(icn.clone());
-    }
+
+    let mut game = LifeGame::<25, 16>::new(icn.clone(), 16 * 20);
     {
-        let game = unsafe { GAME.assume_init_mut() };
         game.make_alive(4, 4, true);
         game.make_alive(4, 5, true);
         game.make_alive(4, 6, true);
         game.make_alive(3, 6, true);
         game.make_alive(2, 5, true);
-
-        // game.make_alive(7, 7, true);
-        // game.make_alive(7, 8, true);
-        // game.make_alive(8, 7, true);
-        // game.make_alive(8, 8, true);
     }
     icn.clear(Default::default()).unwrap();
     loop {
-        let game = unsafe { GAME.assume_init_mut() };
         game.draw().await;
-        let game = unsafe { GAME.assume_init_mut() };
         if game.all_dead_next() {
             break;
         }
         game.step_apply();
         game.step();
-        // Timer::after_millis(100 / 4).await;
+        Timer::after_millis(100).await;
     }
     info!("Fin.");
 }
