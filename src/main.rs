@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+use core::mem::MaybeUninit;
+
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
@@ -12,17 +14,146 @@ use embassy_stm32::{
 };
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
-use embedded_graphics::{
-    draw_target::DrawTarget,
-    geometry::Point,
-    mono_font::{ascii, MonoTextStyleBuilder},
-    pixelcolor::Gray4,
-    text::Text,
-    Drawable,
-};
-use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
+use embedded_graphics::draw_target::DrawTarget;
+use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum CellState {
+    #[default]
+    Dead = 0,
+    Alive = 1,
+}
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum BoarderPolicy {
+    #[default]
+    Ignored,
+    Looping,
+}
+pub struct LifeGame<const W: usize, const H: usize> {
+    map: [[CellState; H]; W],
+    boarder_policy: BoarderPolicy,
+    sender: ICN2037Sender,
+    buffer: [[u8; H]; W],
+}
+impl<const W: usize, const H: usize> LifeGame<W, H> {
+    pub fn new(sender: ICN2037Sender, buffer: [[u8; H]; W]) -> Self {
+        Self {
+            map: [[Default::default(); H]; W],
+            boarder_policy: Default::default(),
+            sender,
+            buffer,
+        }
+    }
+    fn count_neighbors_alive(&self, x: usize, y: usize) -> usize {
+        let mut r = 0;
+        match self.boarder_policy {
+            BoarderPolicy::Ignored => {
+                let sx = if x == 0 { 0 } else { x - 1 };
+                let ex = if x == W - 1 { W - 1 } else { x + 1 };
+                let sy = if y == 0 { 0 } else { y - 1 };
+                let ey = if y == W - 1 { W - 1 } else { y + 1 };
+                for xx in sx..ex {
+                    for yy in sy..ey {
+                        if xx != x && yy != y {
+                            r += self.map[xx][yy] as usize;
+                        }
+                    }
+                }
+            }
+            BoarderPolicy::Looping => {
+                let sx = x as i32 - 1;
+                let ex = x as i32 + 1;
+                let sy = y as i32 - 1;
+                let ey = y as i32 + 1;
+                let mapping = |a, b| {
+                    (
+                        if a < 0 {
+                            a as usize + W
+                        } else {
+                            if a as usize >= W {
+                                a as usize - W
+                            } else {
+                                a as usize
+                            }
+                        },
+                        if b < 0 {
+                            b as usize + H
+                        } else {
+                            if b as usize >= H {
+                                b as usize - H
+                            } else {
+                                b as usize
+                            }
+                        },
+                    )
+                };
+                for xx in sx..ex {
+                    for yy in sy..ey {
+                        let (xx, yy) = mapping(xx, yy);
+                        if xx != x && yy != y {
+                            r += self.map[xx][yy] as usize;
+                        }
+                    }
+                }
+            }
+        }
+        r
+    }
+    pub fn all_dead(&self) -> bool {
+        self.map
+            .iter()
+            .all(|m| m.iter().all(|x| *x == CellState::Dead))
+    }
+    pub fn step(&mut self) {
+        let map = self.map.clone();
+        for x in 0..W {
+            for y in 0..H {
+                let count = self.count_neighbors_alive(x, y);
+                use CellState::*;
+                let next_state = match (map[x][y], count) {
+                    (Alive, v) if v < 2 => Dead,
+                    (Alive, 2) | (Alive, 3) => Alive,
+                    (Alive, v) if v > 3 => Dead,
+                    (Dead, 3) => Alive,
+                    (otherwise, _) => otherwise,
+                };
+                if self.map[x][y] != next_state {
+                    defmt::info!("cell({}, {}) {} -> {}", x, y, self.map[x][y], next_state);
+                }
+                self.map[x][y] = next_state;
+            }
+        }
+    }
+    fn dump_to_buffer(&mut self) {
+        for x in 0..W {
+            for y in 0..H {
+                self.buffer[x][y] = match self.map[x][y] {
+                    CellState::Dead => 0,
+                    CellState::Alive => 15,
+                };
+            }
+        }
+    }
+    pub fn make_alive(&mut self, x: usize, y: usize, alive: bool) {
+        self.map[x][y] = if alive {
+            CellState::Alive
+        } else {
+            CellState::Dead
+        };
+    }
+}
+
+impl LifeGame<25, 16> {
+    pub async fn draw(&'static mut self) {
+        self.dump_to_buffer();
+        let msg = ICN2037Message::PixelsFrame(&self.buffer);
+        self.sender.sender.send(msg).await;
+    }
+}
 
 // DIN = PB5
 // CLK = PB3
@@ -78,41 +209,89 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(daemon_task(icn, rx)).unwrap();
 
-    let mut cnt = 0;
+    // let mut cnt = 0;
 
     let mut icn = sender;
+    icn.clear(Default::default()).unwrap();
+    // loop {
+    //     icn.clear(Default::default()).unwrap();
+    //     Text::with_alignment(
+    //         "Test",
+    //         Point::new(0, cnt),
+    //         MonoTextStyleBuilder::new()
+    //             // .font(&ascii::FONT_5X8)
+    //             .font(&ascii::FONT_6X13_BOLD)
+    //             .text_color(Gray4::new(15))
+    //             .build(),
+    //         embedded_graphics::text::Alignment::Left,
+    //     )
+    //     .draw(&mut icn)
+    //     .unwrap();
+    //     Text::with_alignment(
+    //         "Test",
+    //         Point::new(0, cnt + 16),
+    //         MonoTextStyleBuilder::new()
+    //             // .font(&ascii::FONT_5X8)
+    //             .font(&ascii::FONT_6X13_BOLD)
+    //             .text_color(Gray4::new(1))
+    //             .build(),
+    //         embedded_graphics::text::Alignment::Left,
+    //     )
+    //     .draw(&mut icn)
+    //     .unwrap();
+    //     cnt = cnt + 1;
+    //     if cnt >= 15 {
+    //         cnt = 0;
+    //     }
+    //     Timer::after_millis(100).await;
+    // }
+    // static mut BUFFER: [[u8; 25]; 16] = [[0; 25]; 16];
+    // let buffer = make_static!([[0; 25]; 16]);
+    let buffer = [[0; 16]; 25];
+    // let buffer_list = make_static!(core::array::from_fn(|i| &mut buffer[i].as_slice()));
+    static mut GAME: MaybeUninit<LifeGame<25, 16>> = MaybeUninit::uninit();
+    unsafe {
+        *GAME.as_mut_ptr() = LifeGame::new(icn.clone(), buffer);
+    }
+    // let game = make_static!(LifeGame::new(icn, buffer));
+    {
+        let game = unsafe { GAME.assume_init_mut() };
+        // game.make_alive(4, 4, true);
+        // game.make_alive(4, 6, true);
+        for x in 0..25 {
+            for y in 5..9 {
+                game.make_alive(x, y, true);
+            }
+        }
+    }
     loop {
         icn.clear(Default::default()).unwrap();
-        Text::with_alignment(
-            "Test",
-            Point::new(0, cnt),
-            MonoTextStyleBuilder::new()
-                // .font(&ascii::FONT_5X8)
-                .font(&ascii::FONT_6X13_BOLD)
-                .text_color(Gray4::new(15))
-                .build(),
-            embedded_graphics::text::Alignment::Left,
-        )
-        .draw(&mut icn)
-        .unwrap();
-        Text::with_alignment(
-            "Test",
-            Point::new(0, cnt + 16),
-            MonoTextStyleBuilder::new()
-                // .font(&ascii::FONT_5X8)
-                .font(&ascii::FONT_6X13_BOLD)
-                .text_color(Gray4::new(1))
-                .build(),
-            embedded_graphics::text::Alignment::Left,
-        )
-        .draw(&mut icn)
-        .unwrap();
-        cnt = cnt + 1;
-        if cnt >= 15 {
-            cnt = 0;
+        // Text::with_alignment(
+        //     "Test",
+        //     Point::new(0, cnt),
+        //     MonoTextStyleBuilder::new()
+        //         // .font(&ascii::FONT_5X8)
+        //         .font(&ascii::FONT_6X13_BOLD)
+        //         .text_color(Gray4::new(15))
+        //         .build(),
+        //     embedded_graphics::text::Alignment::Left,
+        // )
+        // .draw(&mut icn)
+        // .unwrap();
+        // cnt = cnt + 1;
+        // if cnt >= 15 {
+        //     cnt = 0;
+        // }
+        let game = unsafe { GAME.assume_init_mut() };
+        game.draw().await;
+        let game = unsafe { GAME.assume_init_mut() };
+        if game.all_dead() {
+            break;
         }
-        Timer::after_millis(100).await;
+        game.step();
+        Timer::after_millis(1000).await;
     }
+    info!("Fin.");
 }
 
 #[embassy_executor::task]

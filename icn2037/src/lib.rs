@@ -115,17 +115,47 @@ where
         loop {
             let msg = receiver.try_receive();
             match msg {
-                Ok(msg) => match msg {
-                    ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
-                    ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
-                        for x in sx..ex {
-                            for y in sy..ey {
-                                self.set_pixel_gray(x, y, v);
+                Ok(msg) => {
+                    // defmt::info!("recv {}", msg);
+                    match msg {
+                        ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
+                        ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
+                            for x in sx..ex {
+                                for y in sy..ey {
+                                    self.set_pixel_gray(x, y, v);
+                                }
+                            }
+                        }
+                        ICN2037Message::Clear => self.buffer.iter_mut().for_each(|x| *x = 0),
+                        ICN2037Message::Buffer(b) => {
+                            // copy buffers
+                            let len = b.len().min(self.buffer.len());
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    b.as_ptr(),
+                                    self.buffer.as_mut_ptr(),
+                                    len,
+                                );
+                            }
+                        }
+                        ICN2037Message::Pixels(pixels) => {
+                            let ex = self.config.width.min(pixels.len());
+                            let ey = self.config.height.min(pixels[0].len());
+                            for x in 0..ex {
+                                for y in 0..ey {
+                                    self.set_pixel_gray(x, y, pixels[x][y]);
+                                }
+                            }
+                        }
+                        ICN2037Message::PixelsFrame(frame) => {
+                            for x in 0..25 {
+                                for y in 0..16 {
+                                    self.set_pixel_gray(x, y, frame[x][y]);
+                                }
                             }
                         }
                     }
-                    ICN2037Message::Clear => self.buffer.iter_mut().for_each(|x| *x = 0),
-                },
+                }
                 Err(_) => {
                     // normal display for one frame
                     let frame_sz = self.frame_buffer_len();
@@ -174,6 +204,7 @@ where
 
 pub const BUFFER_SZ: usize = 1024;
 pub type ICN2037Receiver = Receiver<'static, NoopRawMutex, ICN2037Message, BUFFER_SZ>;
+#[derive(Clone)]
 pub struct ICN2037Sender {
     pub config: DisplayConfig,
     pub sender: Sender<'static, NoopRawMutex, ICN2037Message, BUFFER_SZ>,
@@ -280,5 +311,8 @@ const LUT16: [[u8; 16]; 16] = [
 pub enum ICN2037Message {
     SetPixel((usize, usize, u8)),
     FillPixels((usize, usize, usize, usize, u8)),
+    Buffer(&'static [u16]),
+    Pixels(&'static [&'static [u8]]),
+    PixelsFrame(&'static [[u8; 16]; 25]),
     Clear,
 }
