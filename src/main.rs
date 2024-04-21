@@ -29,12 +29,14 @@ pub enum CellState {
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BoarderPolicy {
-    #[default]
+    // #[default]
     Ignored,
+    #[default]
     Looping,
 }
 pub struct LifeGame<const W: usize, const H: usize> {
-    map: [[CellState; H]; W],
+    state: [[CellState; H]; W],
+    state_next: [[CellState; H]; W],
     boarder_policy: BoarderPolicy,
     sender: ICN2037Sender,
     buffer: [[u8; H]; W],
@@ -42,13 +44,14 @@ pub struct LifeGame<const W: usize, const H: usize> {
 impl<const W: usize, const H: usize> LifeGame<W, H> {
     pub fn new(sender: ICN2037Sender, buffer: [[u8; H]; W]) -> Self {
         Self {
-            map: [[Default::default(); H]; W],
+            state: [[Default::default(); H]; W],
+            state_next: [[Default::default(); H]; W],
             boarder_policy: Default::default(),
             sender,
             buffer,
         }
     }
-    fn count_neighbors_alive(&self, x: usize, y: usize) -> usize {
+    fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
         let mut r = 0;
         match self.boarder_policy {
             BoarderPolicy::Ignored => {
@@ -59,7 +62,7 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
                 for xx in sx..=ex {
                     for yy in sy..=ey {
                         if !(xx == x && yy == y) {
-                            r += self.map[xx][yy] as usize;
+                            r += map[xx][yy] as usize;
                         }
                     }
                 }
@@ -95,7 +98,7 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
                     for yy in sy..=ey {
                         let (xx, yy) = mapping(xx, yy);
                         if !(xx == x && yy == y) {
-                            r += self.map[xx][yy] as usize;
+                            r += map[xx][yy] as usize;
                         }
                     }
                 }
@@ -104,40 +107,44 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
         r
     }
     pub fn all_dead(&self) -> bool {
-        self.map
+        self.state
+            .iter()
+            .all(|m| m.iter().all(|x| *x == CellState::Dead))
+    }
+    pub fn all_dead_next(&self) -> bool {
+        self.state_next
             .iter()
             .all(|m| m.iter().all(|x| *x == CellState::Dead))
     }
     pub fn step(&mut self) {
-        let mut next = self.map.clone();
-        // defmt::info!("step map: {:?}", map);
+        let last = &self.state;
         for x in 0..W {
             for y in 0..H {
-                let count = self.count_neighbors_alive(x, y);
-                // if count > 0 {
-                //     defmt::info!("count({}, {}) = {}", x, y, count);
-                // }
-                // let count = count + 1;
+                let count = self.count_neighbors_alive(x, y, &last);
                 use CellState::*;
-                let next_state = match (self.map[x][y], count) {
+                let next_state = match (self.state[x][y], count) {
                     (Alive, v) if v < 2 => Dead,
                     (Alive, 2) | (Alive, 3) => Alive,
                     (Alive, v) if v > 3 => Dead,
                     (Dead, 3) => Alive,
                     (otherwise, _) => otherwise,
                 };
-                if next[x][y] != next_state {
-                    defmt::info!("cell({}, {}) {} -> {}", x, y, self.map[x][y], next_state);
-                }
-                next[x][y] = next_state;
+                self.state_next[x][y] = next_state;
             }
         }
-        self.map = next;
+    }
+    pub fn step_apply(&mut self) {
+        // for x in 0..W {
+        //     for y in 0..H {
+        //         self.state[x][y] = self.state_next[x][y];
+        //     }
+        // }
+        self.state = self.state_next;
     }
     fn dump_to_buffer(&mut self) {
         for x in 0..W {
             for y in 0..H {
-                self.buffer[x][y] = match self.map[x][y] {
+                self.buffer[x][y] = match self.state[x][y] {
                     CellState::Dead => 0,
                     CellState::Alive => 15,
                 };
@@ -145,7 +152,7 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
         }
     }
     pub fn make_alive(&mut self, x: usize, y: usize, alive: bool) {
-        self.map[x][y] = if alive {
+        self.state_next[x][y] = if alive {
             CellState::Alive
         } else {
             CellState::Dead
@@ -155,9 +162,27 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
 
 impl LifeGame<25, 16> {
     pub async fn draw(&'static mut self) {
-        self.dump_to_buffer();
-        let msg = ICN2037Message::PixelsFrame(&self.buffer);
-        self.sender.sender.send(msg).await;
+        // self.dump_to_buffer();
+        for k in 0..16 {
+            static mut BUFFER: [[u8; 16]; 25] = [[0u8; 16]; 25];
+            // let mut buffer = self.buffer.clone();
+            for x in 0..25 {
+                for y in 0..16 {
+                    let (from, to) = (self.state[x][y], self.state_next[x][y]);
+                    unsafe {
+                        BUFFER[x][y] = match (from, to) {
+                            (CellState::Dead, CellState::Alive) => k,
+                            (CellState::Alive, CellState::Dead) => 15 - k,
+                            (CellState::Alive, CellState::Alive) => 15,
+                            (CellState::Dead, CellState::Dead) => 0,
+                        }
+                    }
+                }
+            }
+            let msg = ICN2037Message::PixelsFrame(unsafe { &BUFFER });
+            self.sender.sender.send(msg).await;
+            Timer::after_millis(20).await;
+        }
     }
 }
 
@@ -224,33 +249,28 @@ async fn main(spawner: Spawner) {
     }
     {
         let game = unsafe { GAME.assume_init_mut() };
-        // for x in 0..25 {
-        //     for y in 5..9 {
-        //         game.make_alive(x, y, true);
-        //     }
-        // }
-
         game.make_alive(4, 4, true);
         game.make_alive(4, 5, true);
         game.make_alive(4, 6, true);
         game.make_alive(3, 6, true);
         game.make_alive(2, 5, true);
 
-        game.make_alive(7, 7, true);
-        game.make_alive(7, 8, true);
-        game.make_alive(8, 7, true);
-        game.make_alive(8, 8, true);
+        // game.make_alive(7, 7, true);
+        // game.make_alive(7, 8, true);
+        // game.make_alive(8, 7, true);
+        // game.make_alive(8, 8, true);
     }
+    icn.clear(Default::default()).unwrap();
     loop {
-        icn.clear(Default::default()).unwrap();
         let game = unsafe { GAME.assume_init_mut() };
         game.draw().await;
         let game = unsafe { GAME.assume_init_mut() };
-        if game.all_dead() {
+        if game.all_dead_next() {
             break;
         }
+        game.step_apply();
         game.step();
-        Timer::after_millis(1000).await;
+        // Timer::after_millis(100 / 4).await;
     }
     info!("Fin.");
 }
