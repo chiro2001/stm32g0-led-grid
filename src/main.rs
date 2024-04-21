@@ -10,10 +10,14 @@ use embassy_stm32::{
     spi::{self, Spi},
     time::Hertz,
 };
-use embassy_sync::channel::Channel;
+use embassy_sync::{
+    blocking_mutex::raw::NoopRawMutex,
+    channel::{Channel, Receiver, Sender},
+};
 use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_hal::digital::{InputPin, OutputPin};
+use futures::Future;
 use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
 use lifegame::LifeGame;
 use rand::SeedableRng;
@@ -94,16 +98,18 @@ async fn main(spawner: Spawner) {
     }
     defmt::info!("noise: {=[u8]:02x}", adc_results);
 
-    let rng = XorShiftRng::from_seed(adc_results);
-    let mut game = Game::new(
-        icn.clone(),
-        16 * 500,
-        rng,
+    let keys = make_static!(KeysDriver::new(
         Input::new(p.PA10, embassy_stm32::gpio::Pull::Up),
         Output::new(p.PA9, Level::Low, Speed::Low),
         Input::new(p.PA12, embassy_stm32::gpio::Pull::Up),
         Output::new(p.PA11, Level::Low, Speed::Low),
-    );
+    ));
+    let keys_channel = &*make_static!(Channel::new());
+    let (tx, rx) = (keys_channel.sender(), keys_channel.receiver());
+    spawner.spawn(keys_task(keys, tx)).unwrap();
+
+    let rng = XorShiftRng::from_seed(adc_results);
+    let mut game = Game::new(icn.clone(), rx, 16 * 500, rng);
     game.run().await;
     info!("Fin.");
 }
@@ -113,43 +119,55 @@ async fn daemon_task(dev: impl ICN2037Device + 'static, receiver: ICN2037Receive
     dev.task(receiver).await.unwrap();
 }
 
-pub struct Game<A1, A2, B1, B2> {
-    game: LifeGame<25, 16, XorShiftRng>,
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Key {
+    A,
+    B,
+}
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum KeyEvent {
+    Pressed(Key),
+    Released(Key),
+}
+
+pub type KeysSender = Sender<'static, NoopRawMutex, KeyEvent, 16>;
+pub type KeysReceiver = Receiver<'static, NoopRawMutex, KeyEvent, 16>;
+
+pub struct KeysDriver<A1, A2, B1, B2> {
     key_a: A1,
     _key_a_out: A2,
     key_b: B1,
     _key_b_out: B2,
 }
-
-impl<A1, A2, B1, B2> Game<A1, A2, B1, B2>
+impl<A1, A2, B1, B2> KeysDriver<A1, A2, B1, B2>
 where
     A1: InputPin,
     A2: OutputPin,
     B1: InputPin,
     B2: OutputPin,
 {
-    pub fn new(
-        icn: ICN2037Sender,
-        fade_time_ms: u64,
-        rng: XorShiftRng,
-        key_a: A1,
-        mut key_a_out: A2,
-        key_b: B1,
-        mut key_b_out: B2,
-    ) -> Self {
-        let game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
+    pub fn new(key_a: A1, mut key_a_out: A2, key_b: B1, mut key_b_out: B2) -> Self {
         key_a_out.set_low().unwrap();
         key_b_out.set_low().unwrap();
         Self {
-            game,
             key_a,
             _key_a_out: key_a_out,
             key_b,
             _key_b_out: key_b_out,
         }
     }
-
-    pub async fn read_keys(&mut self) -> (bool, bool) {
+}
+pub trait KeysDevice {
+    fn read_keys(&mut self) -> impl Future<Output = (bool, bool)>;
+}
+impl<A1, A2, B1, B2> KeysDevice for &mut KeysDriver<A1, A2, B1, B2>
+where
+    A1: InputPin,
+    B1: InputPin,
+{
+    async fn read_keys(&mut self) -> (bool, bool) {
         // fix jitter
         let mut a = false;
         let mut b = false;
@@ -167,14 +185,57 @@ where
         }
         (a, b)
     }
+}
+#[embassy_executor::task]
+async fn keys_task(mut keys: impl KeysDevice + 'static, sender: KeysSender) {
+    let mut a_last = false;
+    let mut b_last = false;
+
+    loop {
+        let (a, b) = keys.read_keys().await;
+        if a != a_last {
+            if a {
+                sender.send(KeyEvent::Pressed(Key::A)).await;
+            } else {
+                sender.send(KeyEvent::Released(Key::A)).await;
+            }
+            a_last = a;
+        }
+        if b != b_last {
+            if b {
+                sender.send(KeyEvent::Pressed(Key::B)).await;
+            } else {
+                sender.send(KeyEvent::Released(Key::B)).await;
+            }
+            b_last = b;
+        }
+        Timer::after_millis(10).await;
+    }
+}
+
+pub struct Game {
+    game: LifeGame<25, 16, XorShiftRng>,
+    keys: KeysReceiver,
+}
+
+impl Game {
+    pub fn new(
+        icn: ICN2037Sender,
+        keys: KeysReceiver,
+        fade_time_ms: u64,
+        rng: XorShiftRng,
+    ) -> Self {
+        let game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
+        Self { game, keys }
+    }
 
     pub async fn run(&mut self) {
         self.game.randomly_arrange_patterns();
         self.game.draw(true).await;
         loop {
             self.game.draw(false).await;
-            let (key_a, key_b) = self.read_keys().await;
-            if (key_a || key_b) || self.game.is_still() {
+            let key_event = self.keys.try_receive();
+            if key_event.is_ok() || self.game.is_still() {
                 // break;
                 info!("re-generate");
                 self.game.randomly_arrange_patterns();

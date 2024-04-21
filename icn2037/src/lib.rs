@@ -64,6 +64,10 @@ where
         }
     }
 
+    pub fn set_brightness(&mut self, brightness: u8) {
+        self.max_brightness = brightness;
+    }
+
     pub fn start(&mut self) -> Result<(), Error> {
         self.oe.set_high().map_err(|_| Error::PinError)?;
         self.le.set_low().map_err(|_| Error::PinError)?;
@@ -71,7 +75,7 @@ where
     }
 
     pub fn write_16b(&mut self, data: u16) -> Result<(), Error> {
-        let buf = [(data >> 8) as u8, (data & 0xff) as u8];
+        let buf = data.to_be_bytes();
         self.spi.write(&buf).map_err(|_| Error::BusError)?;
         // latch
         self.le.set_high().map_err(|_| Error::PinError)?;
@@ -127,7 +131,12 @@ where
                     msg_count += 1;
                     // defmt::info!("recv {}", msg);
                     match msg {
-                        ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
+                        ICN2037Message::SetPixel((x, y, v)) => {
+                            // if v == 0 {
+                            //     defmt::info!("clear pixel [{}, {}]", x, y);
+                            // }
+                            self.set_pixel_gray(x, y, v)
+                        }
                         ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
                             for x in sx..ex {
                                 for y in sy..ey {
