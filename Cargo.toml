@@ -50,6 +50,7 @@ portable-atomic = { version = "1.5", features = ["unsafe-assume-single-core"] }
 
 icn2037 = { path = "icn2037" }
 embedded-graphics = "0.8.1"
+static_cell = { version = "2.0.0", features = ["nightly"] }
 
 [profile.release]
 debug = 2

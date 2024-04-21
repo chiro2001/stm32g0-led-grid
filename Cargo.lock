@@ -633,6 +633,8 @@ name = "icn2037"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "embassy-sync 0.5.0",
+ "embassy-time",
  "embedded-graphics-core",
  "embedded-hal 1.0.0",
 ]
@@ -832,6 +834,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_cell"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa6ba4cf83bf80d3eb25f098ea5e790a0a1fcb5e357442259b231e412c2d3ca0"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "stm32-fmc"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,6 +882,7 @@ dependencies = [
  "icn2037",
  "panic-probe",
  "portable-atomic",
+ "static_cell",
 ]
 
 [[package]]
