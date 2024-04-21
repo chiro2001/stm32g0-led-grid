@@ -2,8 +2,6 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::mem::MaybeUninit;
-
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
@@ -16,6 +14,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use embedded_graphics::draw_target::DrawTarget;
 use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
+use rand::SeedableRng;
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -34,21 +33,26 @@ pub enum BoarderPolicy {
     #[default]
     Looping,
 }
-pub struct LifeGame<const W: usize, const H: usize> {
+pub struct LifeGame<const W: usize, const H: usize, R> {
     state: [[CellState; H]; W],
     state_next: [[CellState; H]; W],
     boarder_policy: BoarderPolicy,
     sender: ICN2037Sender,
     fade_time_ms: u64,
+    rng: R,
 }
-impl<const W: usize, const H: usize> LifeGame<W, H> {
-    pub fn new(sender: ICN2037Sender, fade_time: u64) -> Self {
+impl<const W: usize, const H: usize, R> LifeGame<W, H, R>
+where
+    R: rand::RngCore,
+{
+    pub fn new(sender: ICN2037Sender, fade_time: u64, rng: R) -> Self {
         Self {
             state: [[Default::default(); H]; W],
             state_next: [[Default::default(); H]; W],
             boarder_policy: Default::default(),
             sender,
             fade_time_ms: fade_time,
+            rng,
         }
     }
     fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
@@ -137,11 +141,50 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
         self.state = self.state_next;
     }
     pub fn make_alive(&mut self, x: usize, y: usize, alive: bool) {
+        let x = x % W;
+        let y = y % H;
         self.state_next[x][y] = if alive {
             CellState::Alive
         } else {
             CellState::Dead
         };
+    }
+    pub fn apply_pattern(&mut self, x: usize, y: usize, pattern: &[&str]) {
+        for (dy, line) in pattern.iter().enumerate() {
+            for (dx, c) in line.chars().enumerate() {
+                let x = x + dx;
+                let y = y + dy;
+                if x < W && y < H {
+                    self.make_alive(x, y, c != ' ');
+                }
+            }
+        }
+    }
+    pub fn apply_pattern_transpose(&mut self, x: usize, y: usize, pattern: &[&str]) {
+        for (dy, line) in pattern.iter().enumerate() {
+            for (dx, c) in line.chars().enumerate() {
+                let x = x + dx;
+                let y = y + dy;
+                if x < W && y < H {
+                    self.make_alive(y, x, c != ' ');
+                }
+            }
+        }
+    }
+    pub fn apply_pattern_center(&mut self, pattern: &[&str]) {
+        let (w, h) = (pattern[0].len(), pattern.len());
+        let (x, y) = (W / 2 - w / 2, H / 2 - h / 2);
+        self.apply_pattern(x, y, pattern);
+    }
+    pub fn apply_pattern_center_transpose(&mut self, pattern: &[&str]) {
+        let (w, h) = (pattern[0].len(), pattern.len());
+        let (x, y) = (W / 2 - w / 2, H / 2 - h / 2);
+        self.apply_pattern_transpose(x, y, pattern);
+    }
+    pub fn randomly_arrange_patterns(&mut self) {
+        let picks = [0; 3];
+        // libm::
+        // rand::RngCore;
     }
     pub async fn draw(&mut self) {
         for k in 0..16 {
@@ -222,14 +265,10 @@ async fn main(spawner: Spawner) {
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
 
-    let mut game = LifeGame::<25, 16>::new(icn.clone(), 16 * 20);
-    {
-        game.make_alive(4, 4, true);
-        game.make_alive(4, 5, true);
-        game.make_alive(4, 6, true);
-        game.make_alive(3, 6, true);
-        game.make_alive(2, 5, true);
-    }
+    let rng = rand_xorshift::XorShiftRng::from_seed(Default::default());
+    let mut game = LifeGame::<25, 16, _>::new(icn.clone(), 16 * 20, rng);
+    game.apply_pattern(0, 0, PATTERN_CLOCK_BEACON);
+    game.apply_pattern(5, 0, PATTERN_CLOCK_TRAFIC_LIGHT);
     icn.clear(Default::default()).unwrap();
     loop {
         game.draw().await;
@@ -247,3 +286,126 @@ async fn main(spawner: Spawner) {
 async fn daemon_task(dev: impl ICN2037Device + 'static, receiver: ICN2037Receiver) {
     dev.task(receiver).await.unwrap();
 }
+
+#[rustfmt::skip]
+#[allow(dead_code)]
+mod patterns {
+    pub const PATTERN_STABLE_BLOCK: &[&str] = &[
+        "XX", 
+        "XX"
+    ];
+    pub const PATTERN_STABLE_LOAF: &[&str] = &[
+        " XX ", 
+        "X  X", 
+        " X X", 
+        "  X ", 
+    ];
+    pub const PATTERN_STABLE_BEEHIVE: &[&str] = &[
+        " XX ", 
+        "X  X", 
+        " XX ", 
+    ];
+    pub const PATTERN_STABLE_SHIP: &[&str] = &[
+        " XXX", 
+        "X  X", 
+        "XXX ", 
+    ];
+    pub const PATTERN_STABLE_BOAT: &[&str] = &[
+        "XX ", 
+        "X X", 
+        " X ", 
+    ];
+    pub const PATTERN_STABLE_FLOWER: &[&str] = &[
+        " X ", 
+        "X X", 
+        " X ", 
+    ];
+    pub const PATTERN_STABLE_POND: &[&str] = &[
+        " X ", 
+        "X X", 
+        " X ", 
+    ];
+    pub const PATTERN_STABLE_LIST: &[&[&str]] = &[
+        PATTERN_STABLE_BLOCK,
+        PATTERN_STABLE_LOAF,
+        PATTERN_STABLE_BEEHIVE,
+        PATTERN_STABLE_SHIP,
+        PATTERN_STABLE_BOAT,
+        PATTERN_STABLE_FLOWER,
+        PATTERN_STABLE_POND,
+    ];
+
+    pub const PATTERN_CLOCK_BLINKER: &[&str] = &[
+        "XXX", 
+    ];
+    pub const PATTERN_CLOCK_TOAD: &[&str] = &[
+        " XXX",
+        "XXX ",
+    ];
+    pub const PATTERN_CLOCK_TRAFIC_LIGHT: &[&str] = &[
+        "  XXX  ", 
+        "       ",
+        "X     X",
+        "X     X",
+        "X     X",
+        "       ",
+        "  XXX  ",
+    ];
+    pub const PATTERN_CLOCK_BEACON: &[&str] = &[
+        "XX  ", 
+        "XX  ", 
+        "  XX", 
+        "  XX", 
+    ];
+    pub const PATTERN_CLOCK_PULSAR: &[&str] = &[
+        "  XXX   XXX  ", 
+        "             ",
+        "X    X X    X", 
+        "X    X X    X", 
+        "X    X X    X", 
+        "  XXX   XXX  ", 
+        "             ",
+        "  XXX   XXX  ", 
+        "X    X X    X", 
+        "X    X X    X", 
+        "X    X X    X", 
+        "             ",
+        "  XXX   XXX  ", 
+    ];
+    pub const PATTERN_CLOCK_I_COLUMN: &[&str] = &[
+        "XXX",
+        "X X",
+        "XXX",
+        "XXX",
+        "XXX",
+        "XXX",
+        "X X",
+        "XXX",
+    ];
+    pub const PATTERN_CLOCK_LIST: &[&[&str]] = &[
+        PATTERN_CLOCK_BLINKER,
+        PATTERN_CLOCK_TOAD,
+        PATTERN_CLOCK_TRAFIC_LIGHT,
+        PATTERN_CLOCK_BEACON,
+        PATTERN_CLOCK_PULSAR,
+        PATTERN_CLOCK_I_COLUMN,
+    ];
+
+    pub const PATTERN_FLY_GLIDER: &[&str] = &[
+        " X ",
+        "  X",
+        "XXX",
+    ];
+    pub const PATTERN_FLY_LIGHTWEIGHT_SPACESHIP: &[&str] = &[
+        "X  X ",
+        "    X",
+        "X   X",
+        " XXXX",
+    ];
+    pub const PATTERN_FLY_LIST: &[&[&str]] = &[
+        PATTERN_FLY_GLIDER,
+        PATTERN_FLY_LIGHTWEIGHT_SPACESHIP,
+    ];
+
+}
+use patterns::*;
