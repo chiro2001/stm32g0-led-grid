@@ -39,16 +39,14 @@ pub struct LifeGame<const W: usize, const H: usize> {
     state_next: [[CellState; H]; W],
     boarder_policy: BoarderPolicy,
     sender: ICN2037Sender,
-    buffer: [[u8; H]; W],
 }
 impl<const W: usize, const H: usize> LifeGame<W, H> {
-    pub fn new(sender: ICN2037Sender, buffer: [[u8; H]; W]) -> Self {
+    pub fn new(sender: ICN2037Sender) -> Self {
         Self {
             state: [[Default::default(); H]; W],
             state_next: [[Default::default(); H]; W],
             boarder_policy: Default::default(),
             sender,
-            buffer,
         }
     }
     fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
@@ -134,22 +132,7 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
         }
     }
     pub fn step_apply(&mut self) {
-        // for x in 0..W {
-        //     for y in 0..H {
-        //         self.state[x][y] = self.state_next[x][y];
-        //     }
-        // }
         self.state = self.state_next;
-    }
-    fn dump_to_buffer(&mut self) {
-        for x in 0..W {
-            for y in 0..H {
-                self.buffer[x][y] = match self.state[x][y] {
-                    CellState::Dead => 0,
-                    CellState::Alive => 15,
-                };
-            }
-        }
     }
     pub fn make_alive(&mut self, x: usize, y: usize, alive: bool) {
         self.state_next[x][y] = if alive {
@@ -162,25 +145,33 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
 
 impl LifeGame<25, 16> {
     pub async fn draw(&'static mut self) {
-        // self.dump_to_buffer();
+        // static mut BUFFER: [[u8; 16]; 25] = [[0u8; 16]; 25];
         for k in 0..16 {
-            static mut BUFFER: [[u8; 16]; 25] = [[0u8; 16]; 25];
-            // let mut buffer = self.buffer.clone();
             for x in 0..25 {
                 for y in 0..16 {
                     let (from, to) = (self.state[x][y], self.state_next[x][y]);
-                    unsafe {
-                        BUFFER[x][y] = match (from, to) {
-                            (CellState::Dead, CellState::Alive) => k,
-                            (CellState::Alive, CellState::Dead) => 15 - k,
-                            (CellState::Alive, CellState::Alive) => 15,
-                            (CellState::Dead, CellState::Dead) => 0,
-                        }
+                    // unsafe {
+                    //     BUFFER[x][y] = match (from, to) {
+                    //         (CellState::Dead, CellState::Alive) => k,
+                    //         (CellState::Alive, CellState::Dead) => 15 - k,
+                    //         (CellState::Alive, CellState::Alive) => 15,
+                    //         (CellState::Dead, CellState::Dead) => 0,
+                    //     }
+                    // }
+                    let v = match (from, to) {
+                        (CellState::Dead, CellState::Alive) => Some(k),
+                        (CellState::Alive, CellState::Dead) => Some(15 - k),
+                        (CellState::Alive, CellState::Alive) => None,
+                        (CellState::Dead, CellState::Dead) => None,
+                    };
+                    if let Some(v) = v {
+                        let msg = ICN2037Message::SetPixel((x, y, v));
+                        self.sender.sender.send(msg).await;
                     }
                 }
             }
-            let msg = ICN2037Message::PixelsFrame(unsafe { &BUFFER });
-            self.sender.sender.send(msg).await;
+            // let msg = ICN2037Message::PixelsFrame(unsafe { &BUFFER });
+            // self.sender.sender.send(msg).await;
             Timer::after_millis(20).await;
         }
     }
@@ -242,10 +233,9 @@ async fn main(spawner: Spawner) {
 
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
-    let buffer = [[0; 16]; 25];
     static mut GAME: MaybeUninit<LifeGame<25, 16>> = MaybeUninit::uninit();
     unsafe {
-        *GAME.as_mut_ptr() = LifeGame::new(icn.clone(), buffer);
+        *GAME.as_mut_ptr() = LifeGame::<25, 16>::new(icn.clone());
     }
     {
         let game = unsafe { GAME.assume_init_mut() };
