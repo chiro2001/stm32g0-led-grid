@@ -205,23 +205,38 @@ where
         }
     }
     pub async fn draw(&mut self) {
-        for k in 0..16 {
+        let send = |k, x, y, from, to| {
+            // let (from, to) = (self.state[x][y], self.state_next[x][y]);
+            let v = match (from, to) {
+                (CellState::Dead, CellState::Alive) => Some(k),
+                (CellState::Alive, CellState::Dead) => Some(15 - k),
+                (CellState::Alive, CellState::Alive) => None,
+                (CellState::Dead, CellState::Dead) => None,
+            };
+            v.map(|v| ICN2037Message::SetPixel((x, y, v)))
+        };
+        if self.fade_time_ms >= 16 {
+            for k in 0..16 {
+                for x in 0..25 {
+                    for y in 0..16 {
+                        let (from, to) = (self.state[x][y], self.state_next[x][y]);
+                        if let Some(msg) = send(k, x, y, from, to) {
+                            self.sender.sender.send(msg).await;
+                        }
+                    }
+                }
+                Timer::after_millis(self.fade_time_ms / 16).await;
+            }
+        } else {
             for x in 0..25 {
                 for y in 0..16 {
                     let (from, to) = (self.state[x][y], self.state_next[x][y]);
-                    let v = match (from, to) {
-                        (CellState::Dead, CellState::Alive) => Some(k),
-                        (CellState::Alive, CellState::Dead) => Some(15 - k),
-                        (CellState::Alive, CellState::Alive) => None,
-                        (CellState::Dead, CellState::Dead) => None,
-                    };
-                    if let Some(v) = v {
-                        let msg = ICN2037Message::SetPixel((x, y, v));
+                    if let Some(msg) = send(15, x, y, from, to) {
                         self.sender.sender.send(msg).await;
                     }
                 }
             }
-            Timer::after_millis(self.fade_time_ms / 16).await;
+            Timer::after_millis(self.fade_time_ms).await;
         }
     }
 }
@@ -293,9 +308,7 @@ async fn main(spawner: Spawner) {
     defmt::info!("noise: {:?}", adc_results);
 
     let rng = rand_xorshift::XorShiftRng::from_seed(adc_results);
-    let mut game = LifeGame::<25, 16, _>::new(icn.clone(), 16 * 20, rng);
-    // game.apply_pattern(0, 0, PATTERN_CLOCK_BEACON);
-    // game.apply_pattern(5, 0, PATTERN_CLOCK_TRAFIC_LIGHT);
+    let mut game = LifeGame::<25, 16, _>::new(icn.clone(), 15, rng);
     game.randomly_arrange_patterns();
     icn.clear(Default::default()).unwrap();
     loop {
@@ -305,7 +318,7 @@ async fn main(spawner: Spawner) {
         }
         game.step_apply();
         game.step();
-        Timer::after_millis(100).await;
+        Timer::after_millis(1).await;
     }
     info!("Fin.");
 }
