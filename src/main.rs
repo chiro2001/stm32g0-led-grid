@@ -11,7 +11,7 @@ use embassy_stm32::{
     time::Hertz,
 };
 use embassy_sync::channel::Channel;
-use embassy_time::Timer;
+use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
 use rand::SeedableRng;
@@ -181,10 +181,28 @@ where
         let (x, y) = (W / 2 - w / 2, H / 2 - h / 2);
         self.apply_pattern_transpose(x, y, pattern);
     }
+    pub fn clear(&mut self) {
+        self.state
+            .iter_mut()
+            .for_each(|m| m.iter_mut().for_each(|x| *x = CellState::Dead));
+        self.state_next
+            .iter_mut()
+            .for_each(|m| m.iter_mut().for_each(|x| *x = CellState::Dead));
+    }
     pub fn randomly_arrange_patterns(&mut self) {
-        let picks = [0; 3];
-        // libm::
-        // rand::RngCore;
+        let mut picks = [0; 3];
+        self.rng.fill_bytes(&mut picks);
+        picks.iter_mut().for_each(|x| *x = *x % 3);
+        let patterns = [PATTERN_CLOCK_LIST, PATTERN_FLY_LIST, PATTERN_STABLE_LIST];
+        for k in 0..3 {
+            for i in 0..picks[k] as usize {
+                let pattern = patterns[i];
+                let x = self.rng.next_u32() as usize % W;
+                let y = self.rng.next_u32() as usize % H;
+                let idx = self.rng.next_u32() as usize % pattern.len();
+                self.apply_pattern(x, y, pattern[idx]);
+            }
+        }
     }
     pub async fn draw(&mut self) {
         for k in 0..16 {
@@ -265,10 +283,20 @@ async fn main(spawner: Spawner) {
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
 
-    let rng = rand_xorshift::XorShiftRng::from_seed(Default::default());
+    let mut adc = embassy_stm32::adc::Adc::new(p.ADC1, &mut Delay);
+    let mut adc_pin = p.PA0;
+    let mut adc_results = [0u8; 16];
+    for i in 0..64 {
+        adc_results[i % 16] ^= ((adc.read(&mut adc_pin) + i as u16) % 254) as u8;
+        Timer::after_millis(1).await;
+    }
+    defmt::info!("noise: {:?}", adc_results);
+
+    let rng = rand_xorshift::XorShiftRng::from_seed(adc_results);
     let mut game = LifeGame::<25, 16, _>::new(icn.clone(), 16 * 20, rng);
-    game.apply_pattern(0, 0, PATTERN_CLOCK_BEACON);
-    game.apply_pattern(5, 0, PATTERN_CLOCK_TRAFIC_LIGHT);
+    // game.apply_pattern(0, 0, PATTERN_CLOCK_BEACON);
+    // game.apply_pattern(5, 0, PATTERN_CLOCK_TRAFIC_LIGHT);
+    game.randomly_arrange_patterns();
     icn.clear(Default::default()).unwrap();
     loop {
         game.draw().await;
