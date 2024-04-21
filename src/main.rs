@@ -53,12 +53,12 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
         match self.boarder_policy {
             BoarderPolicy::Ignored => {
                 let sx = if x == 0 { 0 } else { x - 1 };
-                let ex = if x == W - 1 { W - 1 } else { x + 1 };
+                let ex = if x >= W - 1 { W - 1 } else { x + 1 };
                 let sy = if y == 0 { 0 } else { y - 1 };
-                let ey = if y == W - 1 { W - 1 } else { y + 1 };
-                for xx in sx..ex {
-                    for yy in sy..ey {
-                        if xx != x && yy != y {
+                let ey = if y >= H - 1 { H - 1 } else { y + 1 };
+                for xx in sx..=ex {
+                    for yy in sy..=ey {
+                        if !(xx == x && yy == y) {
                             r += self.map[xx][yy] as usize;
                         }
                     }
@@ -91,10 +91,10 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
                         },
                     )
                 };
-                for xx in sx..ex {
-                    for yy in sy..ey {
+                for xx in sx..=ex {
+                    for yy in sy..=ey {
                         let (xx, yy) = mapping(xx, yy);
-                        if xx != x && yy != y {
+                        if !(xx == x && yy == y) {
                             r += self.map[xx][yy] as usize;
                         }
                     }
@@ -109,24 +109,30 @@ impl<const W: usize, const H: usize> LifeGame<W, H> {
             .all(|m| m.iter().all(|x| *x == CellState::Dead))
     }
     pub fn step(&mut self) {
-        let map = self.map.clone();
+        let mut next = self.map.clone();
+        // defmt::info!("step map: {:?}", map);
         for x in 0..W {
             for y in 0..H {
                 let count = self.count_neighbors_alive(x, y);
+                // if count > 0 {
+                //     defmt::info!("count({}, {}) = {}", x, y, count);
+                // }
+                // let count = count + 1;
                 use CellState::*;
-                let next_state = match (map[x][y], count) {
+                let next_state = match (self.map[x][y], count) {
                     (Alive, v) if v < 2 => Dead,
                     (Alive, 2) | (Alive, 3) => Alive,
                     (Alive, v) if v > 3 => Dead,
                     (Dead, 3) => Alive,
                     (otherwise, _) => otherwise,
                 };
-                if self.map[x][y] != next_state {
+                if next[x][y] != next_state {
                     defmt::info!("cell({}, {}) {} -> {}", x, y, self.map[x][y], next_state);
                 }
-                self.map[x][y] = next_state;
+                next[x][y] = next_state;
             }
         }
+        self.map = next;
     }
     fn dump_to_buffer(&mut self) {
         for x in 0..W {
@@ -218,11 +224,22 @@ async fn main(spawner: Spawner) {
     }
     {
         let game = unsafe { GAME.assume_init_mut() };
-        for x in 0..25 {
-            for y in 5..9 {
-                game.make_alive(x, y, true);
-            }
-        }
+        // for x in 0..25 {
+        //     for y in 5..9 {
+        //         game.make_alive(x, y, true);
+        //     }
+        // }
+
+        game.make_alive(4, 4, true);
+        game.make_alive(4, 5, true);
+        game.make_alive(4, 6, true);
+        game.make_alive(3, 6, true);
+        game.make_alive(2, 5, true);
+
+        game.make_alive(7, 7, true);
+        game.make_alive(7, 8, true);
+        game.make_alive(8, 7, true);
+        game.make_alive(8, 8, true);
     }
     loop {
         icn.clear(Default::default()).unwrap();
