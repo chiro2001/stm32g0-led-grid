@@ -209,55 +209,15 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(daemon_task(icn, rx)).unwrap();
 
-    // let mut cnt = 0;
-
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
-    // loop {
-    //     icn.clear(Default::default()).unwrap();
-    //     Text::with_alignment(
-    //         "Test",
-    //         Point::new(0, cnt),
-    //         MonoTextStyleBuilder::new()
-    //             // .font(&ascii::FONT_5X8)
-    //             .font(&ascii::FONT_6X13_BOLD)
-    //             .text_color(Gray4::new(15))
-    //             .build(),
-    //         embedded_graphics::text::Alignment::Left,
-    //     )
-    //     .draw(&mut icn)
-    //     .unwrap();
-    //     Text::with_alignment(
-    //         "Test",
-    //         Point::new(0, cnt + 16),
-    //         MonoTextStyleBuilder::new()
-    //             // .font(&ascii::FONT_5X8)
-    //             .font(&ascii::FONT_6X13_BOLD)
-    //             .text_color(Gray4::new(1))
-    //             .build(),
-    //         embedded_graphics::text::Alignment::Left,
-    //     )
-    //     .draw(&mut icn)
-    //     .unwrap();
-    //     cnt = cnt + 1;
-    //     if cnt >= 15 {
-    //         cnt = 0;
-    //     }
-    //     Timer::after_millis(100).await;
-    // }
-    // static mut BUFFER: [[u8; 25]; 16] = [[0; 25]; 16];
-    // let buffer = make_static!([[0; 25]; 16]);
     let buffer = [[0; 16]; 25];
-    // let buffer_list = make_static!(core::array::from_fn(|i| &mut buffer[i].as_slice()));
     static mut GAME: MaybeUninit<LifeGame<25, 16>> = MaybeUninit::uninit();
     unsafe {
         *GAME.as_mut_ptr() = LifeGame::new(icn.clone(), buffer);
     }
-    // let game = make_static!(LifeGame::new(icn, buffer));
     {
         let game = unsafe { GAME.assume_init_mut() };
-        // game.make_alive(4, 4, true);
-        // game.make_alive(4, 6, true);
         for x in 0..25 {
             for y in 5..9 {
                 game.make_alive(x, y, true);
@@ -266,22 +226,6 @@ async fn main(spawner: Spawner) {
     }
     loop {
         icn.clear(Default::default()).unwrap();
-        // Text::with_alignment(
-        //     "Test",
-        //     Point::new(0, cnt),
-        //     MonoTextStyleBuilder::new()
-        //         // .font(&ascii::FONT_5X8)
-        //         .font(&ascii::FONT_6X13_BOLD)
-        //         .text_color(Gray4::new(15))
-        //         .build(),
-        //     embedded_graphics::text::Alignment::Left,
-        // )
-        // .draw(&mut icn)
-        // .unwrap();
-        // cnt = cnt + 1;
-        // if cnt >= 15 {
-        //     cnt = 0;
-        // }
         let game = unsafe { GAME.assume_init_mut() };
         game.draw().await;
         let game = unsafe { GAME.assume_init_mut() };
