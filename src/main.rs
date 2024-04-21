@@ -81,6 +81,10 @@ async fn main(spawner: Spawner) {
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
 
+    icn.sender
+        .send(icn2037::ICN2037Message::SetBrightness(4))
+        .await;
+
     let mut adc = embassy_stm32::adc::Adc::new(p.ADC1, &mut Delay);
     let mut adc_pin = p.PA0;
     let mut adc_results = [0u8; 16];
@@ -93,7 +97,7 @@ async fn main(spawner: Spawner) {
     let rng = XorShiftRng::from_seed(adc_results);
     let mut game = Game::new(
         icn.clone(),
-        16 * 0,
+        16 * 500,
         rng,
         Input::new(p.PA10, embassy_stm32::gpio::Pull::Up),
         Output::new(p.PA9, Level::Low, Speed::Low),
@@ -133,8 +137,7 @@ where
         key_b: B1,
         mut key_b_out: B2,
     ) -> Self {
-        let mut game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
-        game.randomly_arrange_patterns();
+        let game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
         key_a_out.set_low().unwrap();
         key_b_out.set_low().unwrap();
         Self {
@@ -166,11 +169,14 @@ where
     }
 
     pub async fn run(&mut self) {
-        self.game.clear();
+        self.game.randomly_arrange_patterns();
+        self.game.draw(true).await;
         loop {
-            self.game.draw().await;
-            if self.game.all_dead_next() {
+            self.game.draw(false).await;
+            let (key_a, key_b) = self.read_keys().await;
+            if (key_a || key_b) || self.game.is_still() {
                 // break;
+                info!("re-generate");
                 self.game.randomly_arrange_patterns();
             }
             self.game.step_apply();

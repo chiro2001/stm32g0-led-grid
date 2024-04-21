@@ -44,6 +44,7 @@ pub struct ICN2037<'d, SPI, OE, LE> {
     le: LE,
     pub config: DisplayConfig,
     pub buffer: &'d mut [u16],
+    max_brightness: u8,
 }
 
 impl<'d, SPI, OE, LE> ICN2037<'d, SPI, OE, LE>
@@ -59,6 +60,7 @@ where
             le,
             config,
             buffer,
+            max_brightness: 15,
         }
     }
 
@@ -107,15 +109,22 @@ where
     pub fn set_pixel_gray(&mut self, x: usize, y: usize, value: u8) {
         let sz = self.frame_buffer_len();
         for k in 0..16 {
-            self.set_pixel(x, y, LUT16[value as usize][k] != 0, k * sz);
+            self.set_pixel(
+                x,
+                y,
+                LUT16[value.min(self.max_brightness) as usize][k] != 0,
+                k * sz,
+            );
         }
     }
 
     pub async fn task_impl(mut self, receiver: ICN2037Receiver) -> Result<(), Error> {
+        let mut msg_count = 0;
         loop {
             let msg = receiver.try_receive();
             match msg {
                 Ok(msg) => {
+                    msg_count += 1;
                     // defmt::info!("recv {}", msg);
                     match msg {
                         ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
@@ -126,7 +135,10 @@ where
                                 }
                             }
                         }
-                        ICN2037Message::Clear => self.buffer.iter_mut().for_each(|x| *x = 0),
+                        ICN2037Message::Clear => {
+                            defmt::info!("clear!");
+                            self.buffer.iter_mut().for_each(|x| *x = 0)
+                        }
                         ICN2037Message::Buffer(b) => {
                             // copy buffers
                             let len = b.len().min(self.buffer.len());
@@ -154,9 +166,16 @@ where
                                 }
                             }
                         }
+                        ICN2037Message::SetBrightness(brightness) => {
+                            self.max_brightness = brightness
+                        }
                     }
                 }
                 Err(_) => {
+                    if msg_count > 0 {
+                        defmt::debug!("last msg count {}", msg_count);
+                    }
+                    msg_count = 0;
                     // normal display for one frame
                     let frame_sz = self.frame_buffer_len();
                     for k in 0..16 {
@@ -315,4 +334,5 @@ pub enum ICN2037Message {
     Pixels(&'static [&'static [u8]]),
     PixelsFrame(&'static [[u8; 16]; 25]),
     Clear,
+    SetBrightness(u8),
 }

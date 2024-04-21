@@ -107,13 +107,45 @@ where
             .iter()
             .all(|m| m.iter().all(|x| *x == CellState::Dead))
     }
+    pub fn is_still(&self) -> bool {
+        if self.state == self.state_next {
+            return true;
+        }
+        if self.all_dead() && self.all_dead_next() {
+            return true;
+        }
+        // detect 2 cycle
+        let mut next = [[CellState::Dead; H]; W];
+        self.step_calc(&self.state_next, &mut next);
+        if self.state == next {
+            return true;
+        }
+        false
+    }
+    pub fn step_calc(&self, last: &[[CellState; H]; W], next: &mut [[CellState; H]; W]) {
+        for x in 0..W {
+            for y in 0..H {
+                let count = self.count_neighbors_alive(x, y, last);
+                use CellState::*;
+                let next_state = match (last[x][y], count) {
+                    (Alive, v) if v < 2 => Dead,
+                    (Alive, 2) | (Alive, 3) => Alive,
+                    (Alive, v) if v > 3 => Dead,
+                    (Dead, 3) => Alive,
+                    (otherwise, _) => otherwise,
+                };
+                next[x][y] = next_state;
+            }
+        }
+    }
+
     pub fn step(&mut self) {
         let last = &self.state;
         for x in 0..W {
             for y in 0..H {
-                let count = self.count_neighbors_alive(x, y, &last);
+                let count = self.count_neighbors_alive(x, y, last);
                 use CellState::*;
-                let next_state = match (self.state[x][y], count) {
+                let next_state = match (last[x][y], count) {
                     (Alive, v) if v < 2 => Dead,
                     (Alive, 2) | (Alive, 3) => Alive,
                     (Alive, v) if v > 3 => Dead,
@@ -175,8 +207,10 @@ where
         self.state_next
             .iter_mut()
             .for_each(|m| m.iter_mut().for_each(|x| *x = CellState::Dead));
+        self.sender.sender.try_send(ICN2037Message::Clear).unwrap();
     }
     pub fn randomly_arrange_patterns(&mut self) {
+        self.clear();
         let mut picks = [0; 3];
         self.rng.fill_bytes(&mut picks);
         picks.iter_mut().for_each(|x| *x = *x % 3);
@@ -191,18 +225,19 @@ where
             }
         }
     }
-    pub async fn draw(&mut self) {
+    pub async fn draw(&mut self, quick: bool) {
+        let k_max = 4;
         let send = |k, x, y, from, to| {
             let v = match (from, to) {
                 (CellState::Dead, CellState::Alive) => Some(k),
-                (CellState::Alive, CellState::Dead) => Some(15 - k),
+                (CellState::Alive, CellState::Dead) => Some(k_max - k),
                 (CellState::Alive, CellState::Alive) => None,
                 (CellState::Dead, CellState::Dead) => None,
             };
             v.map(|v| ICN2037Message::SetPixel((x, y, v)))
         };
-        if self.fade_time_ms >= 16 {
-            for k in 0..16 {
+        if self.fade_time_ms >= 16 && !quick {
+            for k in 1..=k_max {
                 for x in 0..25 {
                     for y in 0..16 {
                         let (from, to) = (self.state[x][y], self.state_next[x][y]);
@@ -222,7 +257,11 @@ where
                     }
                 }
             }
-            Timer::after_millis(self.fade_time_ms).await;
+            if quick {
+                Timer::after_millis(1).await;
+            } else {
+                Timer::after_millis(self.fade_time_ms).await;
+            }
         }
     }
 }
