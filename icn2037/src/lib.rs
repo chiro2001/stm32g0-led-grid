@@ -4,9 +4,9 @@ use core::future::Future;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
-use embassy_time::{Delay, Timer};
+use embassy_time::Timer;
+use embedded_graphics_core::geometry::Dimensions;
 use embedded_graphics_core::pixelcolor::IntoStorage;
-use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiBus;
 
@@ -115,13 +115,17 @@ where
         loop {
             let msg = receiver.try_receive();
             match msg {
-                Ok(msg) => {
-                    // defmt::info!("recv msg {}", msg);
-                    match msg {
-                        ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
+                Ok(msg) => match msg {
+                    ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
+                    ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
+                        for x in sx..ex {
+                            for y in sy..ey {
+                                self.set_pixel_gray(x, y, v);
+                            }
+                        }
                     }
-                    // Timer::after_ticks(0).await;
-                }
+                    ICN2037Message::Clear => self.buffer.iter_mut().for_each(|x| *x = 0),
+                },
                 Err(_) => {
                     // normal display for one frame
                     let frame_sz = self.frame_buffer_len();
@@ -129,11 +133,8 @@ where
                         self.flush(k * frame_sz)?;
                     }
                     Timer::after_ticks(0).await;
-                    // Timer::after_millis(100).await;
                 }
             }
-            // Timer::after_ticks(0).await;
-            // Timer::after_millis(100).await;
         }
     }
 }
@@ -215,6 +216,30 @@ impl embedded_graphics_core::draw_target::DrawTarget for ICN2037Sender {
         }
         Ok(())
     }
+    fn fill_solid(
+        &mut self,
+        area: &embedded_graphics_core::primitives::Rectangle,
+        color: Self::Color,
+    ) -> Result<(), Self::Error> {
+        let (sx, sy, ex, ey) = (
+            area.top_left.x as usize,
+            area.top_left.y as usize,
+            area.bottom_right().unwrap().x as usize,
+            area.bottom_right().unwrap().y as usize,
+        );
+        let msg = ICN2037Message::FillPixels((sx, sy, ex, ey, color.into_storage()));
+        self.sender.try_send(msg).unwrap();
+        Ok(())
+    }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+        if color.into_storage() == 0 {
+            self.sender.try_send(ICN2037Message::Clear).unwrap();
+            Ok(())
+        } else {
+            self.fill_solid(&self.bounding_box(), color)
+        }
+    }
 }
 
 pub trait ICN2037Device {
@@ -250,8 +275,10 @@ const LUT16: [[u8; 16]; 16] = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // 15
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ICN2037Message {
     SetPixel((usize, usize, u8)),
+    FillPixels((usize, usize, usize, usize, u8)),
+    Clear,
 }

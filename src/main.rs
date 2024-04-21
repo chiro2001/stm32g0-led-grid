@@ -10,21 +10,17 @@ use embassy_stm32::{
     spi::{self, Spi},
     time::Hertz,
 };
-use embassy_sync::{
-    blocking_mutex::raw::NoopRawMutex,
-    channel::{Channel, Receiver},
-};
-use embassy_time::{Delay, Timer};
+use embassy_sync::channel::Channel;
+use embassy_time::Timer;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
     mono_font::{ascii, MonoTextStyleBuilder},
-    pixelcolor::{BinaryColor, Gray4},
+    pixelcolor::Gray4,
     text::Text,
-    Drawable, Pixel,
+    Drawable,
 };
-use embedded_hal::delay::DelayNs;
-use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
+use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -38,8 +34,6 @@ async fn main(spawner: Spawner) {
     let mut config: embassy_stm32::Config = Default::default();
     config.rcc.mux = embassy_stm32::rcc::ClockSrc::PLL(Default::default());
     let p = embassy_stm32::init(config);
-
-    let mut delay = Delay {};
 
     info!("start");
 
@@ -86,46 +80,6 @@ async fn main(spawner: Spawner) {
 
     let mut cnt = 0;
 
-    // for k in 0..25 {
-    //     for y in 0..16 {
-    //         let c = y as u8;
-    //         tx.send(ICN2037Message::SetPixel((k, y, c))).await;
-    //         tx.send(ICN2037Message::SetPixel((k, y, c))).await;
-    //     }
-    // }
-    // loop {
-    //     for y in 0..16 {
-    //         for k in 0..25 {
-    //             let c = (y as u8).max(cnt) - cnt;
-    //             tx.send(ICN2037Message::SetPixel((k, y, c))).await;
-    //             tx.send(ICN2037Message::SetPixel((k, y, c))).await;
-    //         }
-    //     }
-    //     cnt += 1;
-    //     if cnt >= 16 {
-    //         cnt = 0;
-    //     }
-    //     Timer::after_millis(10).await;
-    //     info!("cnt = {}", cnt);
-    // }
-
-    // let mut d = true;
-    // loop {
-    //     if d {
-    //         cnt += 1;
-    //     } else {
-    //         cnt -= 1;
-    //     }
-    //     if cnt == 0 {
-    //         d = true;
-    //     }
-    //     if cnt == 15 {
-    //         d = false;
-    //     }
-    //     tx.send(ICN2037Message::SetPixel((0, 0, cnt))).await;
-    //     Timer::after_millis(100).await;
-    // }
-
     let mut icn = sender;
     loop {
         icn.clear(Default::default()).unwrap();
@@ -153,15 +107,10 @@ async fn main(spawner: Spawner) {
         )
         .draw(&mut icn)
         .unwrap();
-        // Pixel(Point::zero(), Gray4::new(cnt))
-        //     .draw(&mut icn)
-        //     .unwrap();
-        // tx.send(ICN2037Message::SetPixel((0, 0, cnt))).await;
         cnt = cnt + 1;
         if cnt >= 15 {
             cnt = 0;
         }
-        // delay.delay_ms(200);
         Timer::after_millis(100).await;
     }
 }
