@@ -6,240 +6,23 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     dma::NoDma,
-    gpio::{Level, Output, Speed},
+    gpio::{Input, Level, Output, Speed},
     spi::{self, Spi},
     time::Hertz,
 };
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
-use icn2037::{ICN2037Device, ICN2037Message, ICN2037Receiver, ICN2037Sender};
+use embedded_hal::digital::{InputPin, OutputPin};
+use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
+use lifegame::LifeGame;
 use rand::SeedableRng;
+use rand_xorshift::XorShiftRng;
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum CellState {
-    #[default]
-    Dead = 0,
-    Alive = 1,
-}
-#[derive(Debug, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum BoarderPolicy {
-    // #[default]
-    Ignored,
-    #[default]
-    Looping,
-}
-pub struct LifeGame<const W: usize, const H: usize, R> {
-    state: [[CellState; H]; W],
-    state_next: [[CellState; H]; W],
-    boarder_policy: BoarderPolicy,
-    sender: ICN2037Sender,
-    fade_time_ms: u64,
-    rng: R,
-}
-impl<const W: usize, const H: usize, R> LifeGame<W, H, R>
-where
-    R: rand::RngCore,
-{
-    pub fn new(sender: ICN2037Sender, fade_time: u64, rng: R) -> Self {
-        Self {
-            state: [[Default::default(); H]; W],
-            state_next: [[Default::default(); H]; W],
-            boarder_policy: Default::default(),
-            sender,
-            fade_time_ms: fade_time,
-            rng,
-        }
-    }
-    fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
-        let mut r = 0;
-        match self.boarder_policy {
-            BoarderPolicy::Ignored => {
-                let sx = if x == 0 { 0 } else { x - 1 };
-                let ex = if x >= W - 1 { W - 1 } else { x + 1 };
-                let sy = if y == 0 { 0 } else { y - 1 };
-                let ey = if y >= H - 1 { H - 1 } else { y + 1 };
-                for xx in sx..=ex {
-                    for yy in sy..=ey {
-                        if !(xx == x && yy == y) {
-                            r += map[xx][yy] as usize;
-                        }
-                    }
-                }
-            }
-            BoarderPolicy::Looping => {
-                let sx = x as i32 - 1;
-                let ex = x as i32 + 1;
-                let sy = y as i32 - 1;
-                let ey = y as i32 + 1;
-                let mapping = |a, b| {
-                    (
-                        if a < 0 {
-                            a as usize + W
-                        } else {
-                            if a as usize >= W {
-                                a as usize - W
-                            } else {
-                                a as usize
-                            }
-                        },
-                        if b < 0 {
-                            b as usize + H
-                        } else {
-                            if b as usize >= H {
-                                b as usize - H
-                            } else {
-                                b as usize
-                            }
-                        },
-                    )
-                };
-                for xx in sx..=ex {
-                    for yy in sy..=ey {
-                        let (xx, yy) = mapping(xx, yy);
-                        if !(xx == x && yy == y) {
-                            r += map[xx][yy] as usize;
-                        }
-                    }
-                }
-            }
-        }
-        r
-    }
-    pub fn all_dead(&self) -> bool {
-        self.state
-            .iter()
-            .all(|m| m.iter().all(|x| *x == CellState::Dead))
-    }
-    pub fn all_dead_next(&self) -> bool {
-        self.state_next
-            .iter()
-            .all(|m| m.iter().all(|x| *x == CellState::Dead))
-    }
-    pub fn step(&mut self) {
-        let last = &self.state;
-        for x in 0..W {
-            for y in 0..H {
-                let count = self.count_neighbors_alive(x, y, &last);
-                use CellState::*;
-                let next_state = match (self.state[x][y], count) {
-                    (Alive, v) if v < 2 => Dead,
-                    (Alive, 2) | (Alive, 3) => Alive,
-                    (Alive, v) if v > 3 => Dead,
-                    (Dead, 3) => Alive,
-                    (otherwise, _) => otherwise,
-                };
-                self.state_next[x][y] = next_state;
-            }
-        }
-    }
-    pub fn step_apply(&mut self) {
-        self.state = self.state_next;
-    }
-    pub fn make_alive(&mut self, x: usize, y: usize, alive: bool) {
-        let x = x % W;
-        let y = y % H;
-        self.state_next[x][y] = if alive {
-            CellState::Alive
-        } else {
-            CellState::Dead
-        };
-    }
-    pub fn apply_pattern(&mut self, x: usize, y: usize, pattern: &[&str]) {
-        for (dy, line) in pattern.iter().enumerate() {
-            for (dx, c) in line.chars().enumerate() {
-                let x = x + dx;
-                let y = y + dy;
-                if x < W && y < H {
-                    self.make_alive(x, y, c != ' ');
-                }
-            }
-        }
-    }
-    pub fn apply_pattern_transpose(&mut self, x: usize, y: usize, pattern: &[&str]) {
-        for (dy, line) in pattern.iter().enumerate() {
-            for (dx, c) in line.chars().enumerate() {
-                let x = x + dx;
-                let y = y + dy;
-                if x < W && y < H {
-                    self.make_alive(y, x, c != ' ');
-                }
-            }
-        }
-    }
-    pub fn apply_pattern_center(&mut self, pattern: &[&str]) {
-        let (w, h) = (pattern[0].len(), pattern.len());
-        let (x, y) = (W / 2 - w / 2, H / 2 - h / 2);
-        self.apply_pattern(x, y, pattern);
-    }
-    pub fn apply_pattern_center_transpose(&mut self, pattern: &[&str]) {
-        let (w, h) = (pattern[0].len(), pattern.len());
-        let (x, y) = (W / 2 - w / 2, H / 2 - h / 2);
-        self.apply_pattern_transpose(x, y, pattern);
-    }
-    pub fn clear(&mut self) {
-        self.state
-            .iter_mut()
-            .for_each(|m| m.iter_mut().for_each(|x| *x = CellState::Dead));
-        self.state_next
-            .iter_mut()
-            .for_each(|m| m.iter_mut().for_each(|x| *x = CellState::Dead));
-    }
-    pub fn randomly_arrange_patterns(&mut self) {
-        let mut picks = [0; 3];
-        self.rng.fill_bytes(&mut picks);
-        picks.iter_mut().for_each(|x| *x = *x % 3);
-        let patterns = [PATTERN_CLOCK_LIST, PATTERN_FLY_LIST, PATTERN_STABLE_LIST];
-        for k in 0..3 {
-            for i in 0..picks[k] as usize {
-                let pattern = patterns[i];
-                let x = self.rng.next_u32() as usize % W;
-                let y = self.rng.next_u32() as usize % H;
-                let idx = self.rng.next_u32() as usize % pattern.len();
-                self.apply_pattern(x, y, pattern[idx]);
-            }
-        }
-    }
-    pub async fn draw(&mut self) {
-        let send = |k, x, y, from, to| {
-            // let (from, to) = (self.state[x][y], self.state_next[x][y]);
-            let v = match (from, to) {
-                (CellState::Dead, CellState::Alive) => Some(k),
-                (CellState::Alive, CellState::Dead) => Some(15 - k),
-                (CellState::Alive, CellState::Alive) => None,
-                (CellState::Dead, CellState::Dead) => None,
-            };
-            v.map(|v| ICN2037Message::SetPixel((x, y, v)))
-        };
-        if self.fade_time_ms >= 16 {
-            for k in 0..16 {
-                for x in 0..25 {
-                    for y in 0..16 {
-                        let (from, to) = (self.state[x][y], self.state_next[x][y]);
-                        if let Some(msg) = send(k, x, y, from, to) {
-                            self.sender.sender.send(msg).await;
-                        }
-                    }
-                }
-                Timer::after_millis(self.fade_time_ms / 16).await;
-            }
-        } else {
-            for x in 0..25 {
-                for y in 0..16 {
-                    let (from, to) = (self.state[x][y], self.state_next[x][y]);
-                    if let Some(msg) = send(15, x, y, from, to) {
-                        self.sender.sender.send(msg).await;
-                    }
-                }
-            }
-            Timer::after_millis(self.fade_time_ms).await;
-        }
-    }
-}
+mod lifegame;
+mod patterns;
 
 // DIN = PB5
 // CLK = PB3
@@ -305,21 +88,19 @@ async fn main(spawner: Spawner) {
         adc_results[i % 16] ^= ((adc.read(&mut adc_pin) + i as u16) % 254) as u8;
         Timer::after_millis(1).await;
     }
-    defmt::info!("noise: {:?}", adc_results);
+    defmt::info!("noise: {=[u8]:02x}", adc_results);
 
-    let rng = rand_xorshift::XorShiftRng::from_seed(adc_results);
-    let mut game = LifeGame::<25, 16, _>::new(icn.clone(), 15, rng);
-    game.randomly_arrange_patterns();
-    icn.clear(Default::default()).unwrap();
-    loop {
-        game.draw().await;
-        if game.all_dead_next() {
-            break;
-        }
-        game.step_apply();
-        game.step();
-        Timer::after_millis(1).await;
-    }
+    let rng = XorShiftRng::from_seed(adc_results);
+    let mut game = Game::new(
+        icn.clone(),
+        16 * 0,
+        rng,
+        Input::new(p.PA10, embassy_stm32::gpio::Pull::Up),
+        Output::new(p.PA9, Level::Low, Speed::Low),
+        Input::new(p.PA12, embassy_stm32::gpio::Pull::Up),
+        Output::new(p.PA11, Level::Low, Speed::Low),
+    );
+    game.run().await;
     info!("Fin.");
 }
 
@@ -328,125 +109,73 @@ async fn daemon_task(dev: impl ICN2037Device + 'static, receiver: ICN2037Receive
     dev.task(receiver).await.unwrap();
 }
 
-#[rustfmt::skip]
-#[allow(dead_code)]
-mod patterns {
-    pub const PATTERN_STABLE_BLOCK: &[&str] = &[
-        "XX", 
-        "XX"
-    ];
-    pub const PATTERN_STABLE_LOAF: &[&str] = &[
-        " XX ", 
-        "X  X", 
-        " X X", 
-        "  X ", 
-    ];
-    pub const PATTERN_STABLE_BEEHIVE: &[&str] = &[
-        " XX ", 
-        "X  X", 
-        " XX ", 
-    ];
-    pub const PATTERN_STABLE_SHIP: &[&str] = &[
-        " XXX", 
-        "X  X", 
-        "XXX ", 
-    ];
-    pub const PATTERN_STABLE_BOAT: &[&str] = &[
-        "XX ", 
-        "X X", 
-        " X ", 
-    ];
-    pub const PATTERN_STABLE_FLOWER: &[&str] = &[
-        " X ", 
-        "X X", 
-        " X ", 
-    ];
-    pub const PATTERN_STABLE_POND: &[&str] = &[
-        " X ", 
-        "X X", 
-        " X ", 
-    ];
-    pub const PATTERN_STABLE_LIST: &[&[&str]] = &[
-        PATTERN_STABLE_BLOCK,
-        PATTERN_STABLE_LOAF,
-        PATTERN_STABLE_BEEHIVE,
-        PATTERN_STABLE_SHIP,
-        PATTERN_STABLE_BOAT,
-        PATTERN_STABLE_FLOWER,
-        PATTERN_STABLE_POND,
-    ];
-
-    pub const PATTERN_CLOCK_BLINKER: &[&str] = &[
-        "XXX", 
-    ];
-    pub const PATTERN_CLOCK_TOAD: &[&str] = &[
-        " XXX",
-        "XXX ",
-    ];
-    pub const PATTERN_CLOCK_TRAFIC_LIGHT: &[&str] = &[
-        "  XXX  ", 
-        "       ",
-        "X     X",
-        "X     X",
-        "X     X",
-        "       ",
-        "  XXX  ",
-    ];
-    pub const PATTERN_CLOCK_BEACON: &[&str] = &[
-        "XX  ", 
-        "XX  ", 
-        "  XX", 
-        "  XX", 
-    ];
-    pub const PATTERN_CLOCK_PULSAR: &[&str] = &[
-        "  XXX   XXX  ", 
-        "             ",
-        "X    X X    X", 
-        "X    X X    X", 
-        "X    X X    X", 
-        "  XXX   XXX  ", 
-        "             ",
-        "  XXX   XXX  ", 
-        "X    X X    X", 
-        "X    X X    X", 
-        "X    X X    X", 
-        "             ",
-        "  XXX   XXX  ", 
-    ];
-    pub const PATTERN_CLOCK_I_COLUMN: &[&str] = &[
-        "XXX",
-        "X X",
-        "XXX",
-        "XXX",
-        "XXX",
-        "XXX",
-        "X X",
-        "XXX",
-    ];
-    pub const PATTERN_CLOCK_LIST: &[&[&str]] = &[
-        PATTERN_CLOCK_BLINKER,
-        PATTERN_CLOCK_TOAD,
-        PATTERN_CLOCK_TRAFIC_LIGHT,
-        PATTERN_CLOCK_BEACON,
-        PATTERN_CLOCK_PULSAR,
-        PATTERN_CLOCK_I_COLUMN,
-    ];
-
-    pub const PATTERN_FLY_GLIDER: &[&str] = &[
-        " X ",
-        "  X",
-        "XXX",
-    ];
-    pub const PATTERN_FLY_LIGHTWEIGHT_SPACESHIP: &[&str] = &[
-        "X  X ",
-        "    X",
-        "X   X",
-        " XXXX",
-    ];
-    pub const PATTERN_FLY_LIST: &[&[&str]] = &[
-        PATTERN_FLY_GLIDER,
-        PATTERN_FLY_LIGHTWEIGHT_SPACESHIP,
-    ];
-
+pub struct Game<A1, A2, B1, B2> {
+    game: LifeGame<25, 16, XorShiftRng>,
+    key_a: A1,
+    _key_a_out: A2,
+    key_b: B1,
+    _key_b_out: B2,
 }
-use patterns::*;
+
+impl<A1, A2, B1, B2> Game<A1, A2, B1, B2>
+where
+    A1: InputPin,
+    A2: OutputPin,
+    B1: InputPin,
+    B2: OutputPin,
+{
+    pub fn new(
+        icn: ICN2037Sender,
+        fade_time_ms: u64,
+        rng: XorShiftRng,
+        key_a: A1,
+        mut key_a_out: A2,
+        key_b: B1,
+        mut key_b_out: B2,
+    ) -> Self {
+        let mut game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
+        game.randomly_arrange_patterns();
+        key_a_out.set_low().unwrap();
+        key_b_out.set_low().unwrap();
+        Self {
+            game,
+            key_a,
+            _key_a_out: key_a_out,
+            key_b,
+            _key_b_out: key_b_out,
+        }
+    }
+
+    pub async fn read_keys(&mut self) -> (bool, bool) {
+        // fix jitter
+        let mut a = false;
+        let mut b = false;
+        if self.key_a.is_low().unwrap() {
+            Timer::after_millis(10).await;
+            if self.key_a.is_low().unwrap() {
+                a = true;
+            }
+        }
+        if self.key_b.is_low().unwrap() {
+            Timer::after_millis(10).await;
+            if self.key_b.is_low().unwrap() {
+                b = true;
+            }
+        }
+        (a, b)
+    }
+
+    pub async fn run(&mut self) {
+        self.game.clear();
+        loop {
+            self.game.draw().await;
+            if self.game.all_dead_next() {
+                // break;
+                self.game.randomly_arrange_patterns();
+            }
+            self.game.step_apply();
+            self.game.step();
+            Timer::after_millis(1).await;
+        }
+    }
+}
