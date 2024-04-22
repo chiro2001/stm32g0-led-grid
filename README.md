@@ -1,5 +1,14 @@
 # ICN2037 with Life Game
 
+## 构建
+
+```shell
+cargo build --release
+cargo run --release
+```
+
+
+
 ## 使用方法
 
 1. 生命游戏模式：
@@ -26,5 +35,5 @@
 1. stm32g070kb，128KiB Flash、36 KiB RAM
 2. ICN2037 x 25 控制 25 x 16 LEDs
 3. ![495839356](README.assets/495839356.png)
-4. 实际走向比上图规整。
-5. 
+4. 实际走向比上图规整
+5. ![IMG_20240422_105110](README.assets/IMG_20240422_105110.jpg)![IMG_20240422_105119](README.assets/IMG_20240422_105119.jpg)
