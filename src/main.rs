@@ -182,7 +182,7 @@ async fn main(spawner: Spawner) {
     state.save().await;
 
     let rng = XorShiftRng::from_seed(adc_results);
-    let mut game = Game::new(icn.clone(), rx, 16 * 20, rng, state);
+    let mut game = Game::new(icn.clone(), rx, rng, state);
     game.run().await;
     info!("Fin.");
 }
@@ -307,6 +307,7 @@ pub struct State<F> {
     game_brightness: u8,
     light_brightness: u8,
     serial_mode: bool,
+    fade_time_ms: u64,
     pub flash: Option<F>,
 }
 impl<F> Default for State<F> {
@@ -323,6 +324,7 @@ impl<F> Default for State<F> {
             game_brightness: 15,
             light_brightness: 15,
             serial_mode: false,
+            fade_time_ms: 16 * 20,
             flash: None,
         }
     }
@@ -377,14 +379,8 @@ impl<F> Game<F>
 where
     F: NorFlash + ReadNorFlash,
 {
-    pub fn new(
-        icn: ICN2037Sender,
-        keys: KeysReceiver,
-        fade_time_ms: u64,
-        rng: XorShiftRng,
-        state: State<F>,
-    ) -> Self {
-        let game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
+    pub fn new(icn: ICN2037Sender, keys: KeysReceiver, rng: XorShiftRng, state: State<F>) -> Self {
+        let game = LifeGame::<25, 16, _>::new(icn, state.fade_time_ms, rng);
         Self { game, keys, state }
     }
 
@@ -404,6 +400,13 @@ where
             .unwrap_or(0);
         self.state.game_brightness = game_brightnesses[game_brightnesses_idx];
 
+        let speed_list = [0, 16, 16 * 20, 16 * 50];
+        let mut speed_idx = speed_list
+            .iter()
+            .position(|&x| x == self.state.fade_time_ms)
+            .unwrap_or(0);
+        self.state.fade_time_ms = speed_list[speed_idx];
+
         loop {
             let key_event = self.keys.try_receive();
             match self.state.page {
@@ -415,9 +418,24 @@ where
                                 self.state.game_brightness,
                             ))
                             .await;
+                        self.game.set_fade_time(self.state.fade_time_ms);
                         page_inited = true;
                     }
                     self.game.draw(false).await;
+
+                    match key_event {
+                        Ok(KeyEvent::Released(Key::A)) | Ok(KeyEvent::Released(Key::B)) => {
+                            if game_pressed_a.is_some() && game_pressed_b.is_some() {
+                                game_pressed_a = None;
+                                game_pressed_b = None;
+                                speed_idx = (speed_idx + 1) % speed_list.len();
+                                self.state.fade_time_ms = speed_list[speed_idx];
+                                self.game.set_fade_time(self.state.fade_time_ms);
+                            }
+                        }
+                        _ => {}
+                    }
+
                     match key_event {
                         Ok(KeyEvent::Pressed(Key::A)) => {
                             game_pressed_a = Some(Instant::now());

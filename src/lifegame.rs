@@ -42,6 +42,9 @@ where
             rng,
         }
     }
+    pub fn set_fade_time(&mut self, fade_time: u64) {
+        self.fade_time_ms = fade_time;
+    }
     pub async fn send_message(&mut self, msg: ICN2037Message) {
         self.sender.sender.send(msg).await;
     }
