@@ -395,7 +395,7 @@ where
         let mut game_pressed_a = None;
         let mut game_pressed_b = None;
         let mut light_d = 1i8;
-        let mut light_pressed = false;
+        let mut light_pressed = None;
 
         let game_brightnesses = [1, 4, 8, 15];
         let mut game_brightnesses_idx = game_brightnesses
@@ -418,17 +418,6 @@ where
                         page_inited = true;
                     }
                     self.game.draw(false).await;
-                    if game_pressed_a.is_some() {
-                        game_brightnesses_idx =
-                            (game_brightnesses_idx + 1) % game_brightnesses.len();
-                        self.state.game_brightness = game_brightnesses[game_brightnesses_idx];
-                        self.game
-                            .send_message(icn2037::ICN2037Message::SetBrightness(
-                                self.state.game_brightness,
-                            ))
-                            .await;
-                        Timer::after_millis(300).await;
-                    }
                     match key_event {
                         Ok(KeyEvent::Pressed(Key::A)) => {
                             game_pressed_a = Some(Instant::now());
@@ -440,6 +429,10 @@ where
                                     self.state.save().await;
                                     page_inited = false;
                                 } else {
+                                    game_brightnesses_idx =
+                                        (game_brightnesses_idx + 1) % game_brightnesses.len();
+                                    self.state.game_brightness =
+                                        game_brightnesses[game_brightnesses_idx];
                                     self.game
                                         .send_message(icn2037::ICN2037Message::SetBrightness(
                                             self.state.game_brightness,
@@ -487,18 +480,20 @@ where
                             .await;
                         page_inited = true;
                     }
-                    if light_pressed {
-                        let light_brightness =
-                            (self.state.light_brightness as i8 + light_d).max(1).min(15) as u8;
-                        if light_brightness != self.state.light_brightness {
-                            defmt::info!("light brightness: {}", self.state.light_brightness);
-                            self.state.light_brightness = light_brightness;
-                            self.game
-                                .send_message(icn2037::ICN2037Message::Fullfill(
-                                    self.state.light_brightness,
-                                ))
-                                .await;
-                            Timer::after_millis(300).await;
+                    if let Some(light_pressed) = light_pressed {
+                        if Instant::now() - light_pressed > Duration::from_millis(1000) {
+                            let light_brightness =
+                                (self.state.light_brightness as i8 + light_d).max(1).min(15) as u8;
+                            if light_brightness != self.state.light_brightness {
+                                defmt::info!("light brightness: {}", self.state.light_brightness);
+                                self.state.light_brightness = light_brightness;
+                                self.game
+                                    .send_message(icn2037::ICN2037Message::Fullfill(
+                                        self.state.light_brightness,
+                                    ))
+                                    .await;
+                                Timer::after_millis(300).await;
+                            }
                         }
                     }
                     match key_event {
@@ -508,11 +503,35 @@ where
                             page_inited = false;
                         }
                         Ok(KeyEvent::Pressed(Key::B)) => {
-                            light_pressed = true;
+                            light_pressed = Some(Instant::now());
                         }
                         Ok(KeyEvent::Released(Key::B)) => {
-                            light_d = -light_d;
-                            light_pressed = false;
+                            if let Some(pressed) = light_pressed {
+                                if Instant::now() - pressed > Duration::from_millis(1000) {
+                                    light_d = -light_d;
+                                } else {
+                                    let light_brightness = (self.state.light_brightness as i8
+                                        + light_d)
+                                        .max(1)
+                                        .min(15)
+                                        as u8;
+                                    if light_brightness != self.state.light_brightness {
+                                        self.state.light_brightness = light_brightness;
+                                        defmt::info!(
+                                            "light brightness: {}",
+                                            self.state.light_brightness
+                                        );
+                                        self.game
+                                            .send_message(icn2037::ICN2037Message::Fullfill(
+                                                self.state.light_brightness,
+                                            ))
+                                            .await;
+                                    } else {
+                                        light_d = -light_d;
+                                    }
+                                }
+                            }
+                            light_pressed = None;
                             self.state.save().await;
                         }
                         _ => {}
