@@ -151,33 +151,52 @@ async fn main(spawner: Spawner) {
     // v0.1.0-5c55912
     let title = "Life Game";
     let subtitle = "Chiro SW";
-    for i in 0..((title.len().max(subtitle.len()) - 5) * 5) as i32 {
-        icn.clear(Default::default()).unwrap();
-        Text::with_alignment(
-            title,
-            Point::new(0 - i, 5),
-            MonoTextStyleBuilder::new()
-                .text_color(Gray4::new(2))
-                .font(&ascii::FONT_5X8)
-                .build(),
-            embedded_graphics::text::Alignment::Left,
-        )
-        .draw(&mut icn)
-        .unwrap();
-        Text::with_alignment(
-            subtitle,
-            Point::new(0 - i, 13),
-            MonoTextStyleBuilder::new()
-                .text_color(Gray4::new(1))
-                .font(&ascii::FONT_5X8)
-                .build(),
-            embedded_graphics::text::Alignment::Left,
-        )
-        .draw(&mut icn)
-        .unwrap();
-        Timer::after_millis(80).await;
+    let title2 = "MK HANS GREAT";
+    let subtitle2 = "  20240422";
+    let texts_list = [[title, subtitle], [title2, subtitle2]];
+    for texts in texts_list {
+        Timer::after_millis(80 * 3).await;
+        for i in 0..((texts[0].len().max(texts[1].len()) - 5) * 5) as i32 {
+            icn.clear(Default::default()).unwrap();
+            Text::with_alignment(
+                texts[0],
+                Point::new(0 - i, 5),
+                MonoTextStyleBuilder::new()
+                    .text_color(Gray4::new(1))
+                    .font(&ascii::FONT_5X8)
+                    .build(),
+                embedded_graphics::text::Alignment::Left,
+            )
+            .draw(&mut icn)
+            .unwrap();
+            if let Some(p) = texts[0].find("GREAT") {
+                Text::with_alignment(
+                    &texts[0][p..(p + 5)],
+                    Point::new(0 - i + 5 * p as i32, 5),
+                    MonoTextStyleBuilder::new()
+                        .text_color(Gray4::new(15))
+                        .font(&ascii::FONT_5X8)
+                        .build(),
+                    embedded_graphics::text::Alignment::Left,
+                )
+                .draw(&mut icn)
+                .unwrap();
+            }
+            Text::with_alignment(
+                texts[1],
+                Point::new(0 - i, 13),
+                MonoTextStyleBuilder::new()
+                    .text_color(Gray4::new(1))
+                    .font(&ascii::FONT_5X8)
+                    .build(),
+                embedded_graphics::text::Alignment::Left,
+            )
+            .draw(&mut icn)
+            .unwrap();
+            Timer::after_millis(80).await;
+        }
+        Timer::after_millis(80 * 5).await;
     }
-    Timer::after_millis(80 * 5).await;
 
     state.save().await;
 
