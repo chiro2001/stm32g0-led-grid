@@ -42,6 +42,9 @@ where
             rng,
         }
     }
+    pub async fn send_message(&mut self, msg: ICN2037Message) {
+        self.sender.sender.send(msg).await;
+    }
     fn count_neighbors_alive(&self, x: usize, y: usize, map: &[[CellState; H]; W]) -> usize {
         let mut r = 0;
         match self.boarder_policy {

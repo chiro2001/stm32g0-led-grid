@@ -129,12 +129,8 @@ where
             match msg {
                 Ok(msg) => {
                     msg_count += 1;
-                    // defmt::info!("recv {}", msg);
                     match msg {
                         ICN2037Message::SetPixel((x, y, v)) => {
-                            // if v == 0 {
-                            //     defmt::info!("clear pixel [{}, {}]", x, y);
-                            // }
                             self.set_pixel_gray(x, y, v)
                         }
                         ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
@@ -177,6 +173,13 @@ where
                         }
                         ICN2037Message::SetBrightness(brightness) => {
                             self.max_brightness = brightness
+                        }
+                        ICN2037Message::Fullfill(brightness) => {
+                            for x in 0..self.config.width {
+                                for y in 0..self.config.height {
+                                    self.set_pixel_gray(x, y, brightness);
+                                }
+                            }
                         }
                     }
                 }
@@ -343,5 +346,6 @@ pub enum ICN2037Message {
     Pixels(&'static [&'static [u8]]),
     PixelsFrame(&'static [[u8; 16]; 25]),
     Clear,
+    Fullfill(u8),
     SetBrightness(u8),
 }

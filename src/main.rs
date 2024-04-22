@@ -111,16 +111,14 @@ async fn main(spawner: Spawner) {
     defmt::info!("noise: {=[u8]:02x}", adc_results);
 
     let keys = make_static!(KeysDriver::new(
-        Input::new(p.PA10, embassy_stm32::gpio::Pull::Up),
-        Output::new(p.PA9, Level::Low, Speed::Low),
         Input::new(p.PA12, embassy_stm32::gpio::Pull::Up),
         Output::new(p.PA11, Level::Low, Speed::Low),
+        Input::new(p.PA10, embassy_stm32::gpio::Pull::Up),
+        Output::new(p.PA9, Level::Low, Speed::Low),
     ));
     let keys_channel = &*make_static!(Channel::new());
     let (tx, rx) = (keys_channel.sender(), keys_channel.receiver());
     spawner.spawn(keys_task(keys, tx)).unwrap();
-
-    // Timer::after_millis(1500).await;
 
     let addr: u32 = STATE_ADDR;
     let mut flash = Flash::new_blocking(p.FLASH)
@@ -130,8 +128,6 @@ async fn main(spawner: Spawner) {
     flash.blocking_read(addr, &mut magic_buf).unwrap();
     let magic = u64::from_le_bytes(magic_buf);
     defmt::info!("magic: 0x{:x}", magic);
-    // let mut state = State::default_with_flash(flash);
-    // Timer::after_millis(1500).await;
     let mut state = if magic == STATE_MAGIC {
         let mut state_buf = [0u8; STATE_SIZE];
         flash.blocking_read(addr, &mut state_buf).unwrap();
@@ -141,9 +137,16 @@ async fn main(spawner: Spawner) {
     } else {
         defmt::warn!("no state found, use default");
         State::default_with_flash(flash)
-        // State::<()>::default()
     };
-    info!("state version: {}", state.version());
+    let version_state = state.version();
+    info!(
+        "state version: {}, expected: {}",
+        version_state, STATE_VERSION
+    );
+    if version_state != STATE_VERSION {
+        defmt::warn!("state version mismatch, reset state");
+        state = State::default_with_flash(state.flash.take().unwrap());
+    }
 
     Text::with_alignment(
         state.version(),
@@ -156,11 +159,9 @@ async fn main(spawner: Spawner) {
     )
     .draw(&mut icn)
     .unwrap();
-    Timer::after_millis(5000).await;
+    Timer::after_millis(500).await;
 
-    state.save();
-
-    // let state = State::<()>::default();
+    state.save().await;
 
     let rng = XorShiftRng::from_seed(adc_results);
     let mut game = Game::new(icn.clone(), rx, 16 * 20, rng, state);
@@ -278,7 +279,7 @@ pub enum Page {
 const STATE_ADDR: u32 = 1024 * 110;
 const STATE_MAGIC: u64 = 0x1145141919810;
 const STATE_SIZE: usize = 512;
-const VERSION: &str = build_info::format!("v{}-{}", $.crate_info.version, $.version_control.unwrap().git().unwrap().commit_short_id);
+const STATE_VERSION: &str = build_info::format!("v{}-{}", $.crate_info.version, $.version_control.unwrap().git().unwrap().commit_short_id);
 #[repr(C)]
 #[repr(align(1))]
 pub struct State<F> {
@@ -294,7 +295,7 @@ impl<F> Default for State<F> {
         let mut version = [b'\0'; 64];
         version
             .iter_mut()
-            .zip(VERSION.as_bytes())
+            .zip(STATE_VERSION.as_bytes())
             .for_each(|(a, b)| *a = *b);
         Self {
             magic: STATE_MAGIC,
@@ -333,22 +334,15 @@ where
             ..Default::default()
         }
     }
-    pub fn save(&mut self) {
+    pub async fn save(&mut self) {
         let mut flash = self.flash.take().unwrap();
         let mut buf = [0u8; STATE_SIZE];
         unsafe {
             core::ptr::copy_nonoverlapping::<Self>(self as *const _, buf.as_mut_ptr() as *mut _, 1);
         }
-        defmt::info!("writing magic: {:x}", &buf[..8]);
         flash.erase(STATE_ADDR, STATE_ADDR + 2048).unwrap();
         flash.write(STATE_ADDR, &buf).unwrap();
-        let mut delay = Delay {};
-        delay.delay_ms(100);
-        let mut buf = [0u8; 8];
-        // check read magic
-        flash.read(STATE_ADDR, &mut buf).unwrap();
-        // let magic = u64::from_le_bytes(buf);
-        defmt::info!("writtern magic: {:x}", buf);
+        Timer::after_millis(100).await;
         self.flash.replace(flash);
     }
 }
@@ -359,7 +353,10 @@ pub struct Game<F> {
     state: State<F>,
 }
 
-impl<F> Game<F> {
+impl<F> Game<F>
+where
+    F: NorFlash + ReadNorFlash,
+{
     pub fn new(
         icn: ICN2037Sender,
         keys: KeysReceiver,
@@ -374,16 +371,78 @@ impl<F> Game<F> {
     pub async fn run(&mut self) {
         self.game.randomly_arrange_patterns();
         self.game.draw(true).await;
+        let mut page_inited = false;
+        let mut light_d = 1i8;
+        let mut light_pressed = false;
         loop {
-            self.game.draw(false).await;
             let key_event = self.keys.try_receive();
-            if key_event.is_ok() || self.game.is_still() {
-                // break;
-                info!("re-generate");
-                self.game.randomly_arrange_patterns();
+            match self.state.page {
+                Page::Game => {
+                    self.game.draw(false).await;
+                    match key_event {
+                        Ok(KeyEvent::Released(Key::A)) => {
+                            self.state.page = Page::Light;
+                            self.state.save().await;
+                            page_inited = false;
+                        }
+                        Ok(KeyEvent::Released(Key::B)) => {
+                            self.game.randomly_arrange_patterns();
+                        }
+                        _ => {}
+                    }
+                    if self.game.is_still() {
+                        // break;
+                        info!("re-generate");
+                        self.game.randomly_arrange_patterns();
+                    }
+                    self.game.step_apply();
+                    self.game.step();
+                }
+                Page::Light => {
+                    if !page_inited {
+                        self.game.clear();
+                        self.game
+                            .send_message(icn2037::ICN2037Message::SetBrightness(15))
+                            .await;
+                        self.game
+                            .send_message(icn2037::ICN2037Message::Fullfill(
+                                self.state.light_brightness,
+                            ))
+                            .await;
+                        page_inited = true;
+                    }
+                    if light_pressed {
+                        let light_brightness =
+                            (self.state.light_brightness as i8 + light_d).max(1).min(15) as u8;
+                        if light_brightness != self.state.light_brightness {
+                            defmt::info!("light brightness: {}", self.state.light_brightness);
+                            self.state.light_brightness = light_brightness;
+                            self.game
+                                .send_message(icn2037::ICN2037Message::Fullfill(
+                                    self.state.light_brightness,
+                                ))
+                                .await;
+                            Timer::after_millis(300).await;
+                        }
+                    }
+                    match key_event {
+                        Ok(KeyEvent::Released(Key::A)) => {
+                            self.state.page = Page::Game;
+                            self.state.save().await;
+                            page_inited = false;
+                        }
+                        Ok(KeyEvent::Pressed(Key::B)) => {
+                            light_pressed = true;
+                        }
+                        Ok(KeyEvent::Released(Key::B)) => {
+                            light_d = -light_d;
+                            light_pressed = false;
+                            self.state.save().await;
+                        }
+                        _ => {}
+                    }
+                }
             }
-            self.game.step_apply();
-            self.game.step();
             Timer::after_millis(1).await;
         }
     }
