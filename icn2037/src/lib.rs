@@ -130,9 +130,7 @@ where
                 Ok(msg) => {
                     msg_count += 1;
                     match msg {
-                        ICN2037Message::SetPixel((x, y, v)) => {
-                            self.set_pixel_gray(x, y, v)
-                        }
+                        ICN2037Message::SetPixel((x, y, v)) => self.set_pixel_gray(x, y, v),
                         ICN2037Message::FillPixels((sx, sy, ex, ey, v)) => {
                             for x in sx..ex {
                                 for y in sy..ey {
@@ -140,10 +138,7 @@ where
                                 }
                             }
                         }
-                        ICN2037Message::Clear => {
-                            defmt::info!("clear!");
-                            self.buffer.iter_mut().for_each(|x| *x = 0)
-                        }
+                        ICN2037Message::Clear => self.buffer.iter_mut().for_each(|x| *x = 0),
                         ICN2037Message::Buffer(b) => {
                             // copy buffers
                             let len = b.len().min(self.buffer.len());
@@ -172,6 +167,7 @@ where
                             }
                         }
                         ICN2037Message::SetBrightness(brightness) => {
+                            defmt::info!("set brightness max {}", brightness);
                             self.max_brightness = brightness
                         }
                         ICN2037Message::Fullfill(brightness) => {

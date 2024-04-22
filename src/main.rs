@@ -15,7 +15,7 @@ use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{Channel, Receiver, Sender},
 };
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
@@ -24,10 +24,7 @@ use embedded_graphics::{
     text::Text,
     Drawable,
 };
-use embedded_hal::{
-    delay::DelayNs,
-    digital::{InputPin, OutputPin},
-};
+use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use futures::Future;
 use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
@@ -148,18 +145,39 @@ async fn main(spawner: Spawner) {
         state = State::default_with_flash(state.flash.take().unwrap());
     }
 
-    Text::with_alignment(
-        state.version(),
-        Point::new(0, 15),
-        MonoTextStyleBuilder::new()
-            .text_color(Gray4::new(15))
-            .font(&ascii::FONT_4X6)
-            .build(),
-        embedded_graphics::text::Alignment::Left,
-    )
-    .draw(&mut icn)
-    .unwrap();
-    Timer::after_millis(500).await;
+    // TEXT:
+    // Life Game 2024
+    // Chiro SW  0422
+    // v0.1.0-5c55912
+    let title = "Life Game";
+    let subtitle = "Chiro SW";
+    for i in 0..((title.len().max(subtitle.len()) - 5) * 5) as i32 {
+        icn.clear(Default::default()).unwrap();
+        Text::with_alignment(
+            title,
+            Point::new(0 - i, 5),
+            MonoTextStyleBuilder::new()
+                .text_color(Gray4::new(2))
+                .font(&ascii::FONT_5X8)
+                .build(),
+            embedded_graphics::text::Alignment::Left,
+        )
+        .draw(&mut icn)
+        .unwrap();
+        Text::with_alignment(
+            subtitle,
+            Point::new(0 - i, 13),
+            MonoTextStyleBuilder::new()
+                .text_color(Gray4::new(1))
+                .font(&ascii::FONT_5X8)
+                .build(),
+            embedded_graphics::text::Alignment::Left,
+        )
+        .draw(&mut icn)
+        .unwrap();
+        Timer::after_millis(80).await;
+    }
+    Timer::after_millis(80 * 5).await;
 
     state.save().await;
 
@@ -288,6 +306,7 @@ pub struct State<F> {
     page: Page,
     game_brightness: u8,
     light_brightness: u8,
+    serial_mode: bool,
     pub flash: Option<F>,
 }
 impl<F> Default for State<F> {
@@ -303,6 +322,7 @@ impl<F> Default for State<F> {
             page: Default::default(),
             game_brightness: 15,
             light_brightness: 15,
+            serial_mode: false,
             flash: None,
         }
     }
@@ -372,21 +392,77 @@ where
         self.game.randomly_arrange_patterns();
         self.game.draw(true).await;
         let mut page_inited = false;
+        let mut game_pressed_a = None;
+        let mut game_pressed_b = None;
         let mut light_d = 1i8;
         let mut light_pressed = false;
+
+        let game_brightnesses = [1, 4, 8, 15];
+        let mut game_brightnesses_idx = game_brightnesses
+            .iter()
+            .position(|&x| x == self.state.game_brightness)
+            .unwrap_or(0);
+        self.state.game_brightness = game_brightnesses[game_brightnesses_idx];
+
         loop {
             let key_event = self.keys.try_receive();
             match self.state.page {
                 Page::Game => {
+                    if !page_inited {
+                        self.game.clear();
+                        self.game
+                            .send_message(icn2037::ICN2037Message::SetBrightness(
+                                self.state.game_brightness,
+                            ))
+                            .await;
+                        page_inited = true;
+                    }
                     self.game.draw(false).await;
+                    if game_pressed_a.is_some() {
+                        game_brightnesses_idx =
+                            (game_brightnesses_idx + 1) % game_brightnesses.len();
+                        self.state.game_brightness = game_brightnesses[game_brightnesses_idx];
+                        self.game
+                            .send_message(icn2037::ICN2037Message::SetBrightness(
+                                self.state.game_brightness,
+                            ))
+                            .await;
+                        Timer::after_millis(300).await;
+                    }
                     match key_event {
+                        Ok(KeyEvent::Pressed(Key::A)) => {
+                            game_pressed_a = Some(Instant::now());
+                        }
                         Ok(KeyEvent::Released(Key::A)) => {
-                            self.state.page = Page::Light;
-                            self.state.save().await;
-                            page_inited = false;
+                            if let Some(pressed) = game_pressed_a {
+                                if Instant::now() - pressed > Duration::from_millis(1000) {
+                                    self.state.page = Page::Light;
+                                    self.state.save().await;
+                                    page_inited = false;
+                                } else {
+                                    self.game
+                                        .send_message(icn2037::ICN2037Message::SetBrightness(
+                                            self.state.game_brightness,
+                                        ))
+                                        .await;
+                                    self.state.save().await;
+                                }
+                            }
+                            game_pressed_a = None;
+                        }
+                        Ok(KeyEvent::Pressed(Key::B)) => {
+                            game_pressed_b = Some(Instant::now());
                         }
                         Ok(KeyEvent::Released(Key::B)) => {
-                            self.game.randomly_arrange_patterns();
+                            if let Some(pressed) = game_pressed_b {
+                                if Instant::now() - pressed > Duration::from_millis(1000) {
+                                    self.state.serial_mode = true;
+                                    self.state.save().await;
+                                } else {
+                                    self.game.randomly_arrange_patterns();
+                                }
+                            }
+                            game_pressed_b = None;
                         }
                         _ => {}
                     }
