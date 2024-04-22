@@ -226,7 +226,7 @@ where
         }
     }
     pub async fn draw(&mut self, quick: bool) {
-        let k_max = 4;
+        let k_max = 15;
         let send = |k, x, y, from, to| {
             let v = match (from, to) {
                 (CellState::Dead, CellState::Alive) => Some(k),
@@ -246,7 +246,7 @@ where
                         }
                     }
                 }
-                Timer::after_millis(self.fade_time_ms / 16).await;
+                Timer::after_millis(self.fade_time_ms / (k_max as u64 + 1)).await;
             }
         } else {
             for x in 0..25 {

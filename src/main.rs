@@ -6,6 +6,7 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     dma::NoDma,
+    flash::Flash,
     gpio::{Input, Level, Output, Speed},
     spi::{self, Spi},
     time::Hertz,
@@ -15,8 +16,19 @@ use embassy_sync::{
     channel::{Channel, Receiver, Sender},
 };
 use embassy_time::{Delay, Timer};
-use embedded_graphics::draw_target::DrawTarget;
-use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_graphics::{
+    draw_target::DrawTarget,
+    geometry::Point,
+    mono_font::{ascii, MonoTextStyleBuilder},
+    pixelcolor::Gray4,
+    text::Text,
+    Drawable,
+};
+use embedded_hal::{
+    delay::DelayNs,
+    digital::{InputPin, OutputPin},
+};
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use futures::Future;
 use icn2037::{ICN2037Device, ICN2037Receiver, ICN2037Sender};
 use lifegame::LifeGame;
@@ -85,9 +97,9 @@ async fn main(spawner: Spawner) {
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
 
-    icn.sender
-        .send(icn2037::ICN2037Message::SetBrightness(4))
-        .await;
+    // icn.sender
+    //     .send(icn2037::ICN2037Message::SetBrightness(4))
+    //     .await;
 
     let mut adc = embassy_stm32::adc::Adc::new(p.ADC1, &mut Delay);
     let mut adc_pin = p.PA0;
@@ -108,8 +120,50 @@ async fn main(spawner: Spawner) {
     let (tx, rx) = (keys_channel.sender(), keys_channel.receiver());
     spawner.spawn(keys_task(keys, tx)).unwrap();
 
+    // Timer::after_millis(1500).await;
+
+    let addr: u32 = STATE_ADDR;
+    let mut flash = Flash::new_blocking(p.FLASH)
+        .into_blocking_regions()
+        .bank1_region;
+    let mut magic_buf = [0u8; 8];
+    flash.blocking_read(addr, &mut magic_buf).unwrap();
+    let magic = u64::from_le_bytes(magic_buf);
+    defmt::info!("magic: 0x{:x}", magic);
+    // let mut state = State::default_with_flash(flash);
+    // Timer::after_millis(1500).await;
+    let mut state = if magic == STATE_MAGIC {
+        let mut state_buf = [0u8; STATE_SIZE];
+        flash.blocking_read(addr, &mut state_buf).unwrap();
+        let mut s: State<_> = unsafe { core::mem::transmute_copy(&state_buf) };
+        s.flash.replace(flash);
+        s
+    } else {
+        defmt::warn!("no state found, use default");
+        State::default_with_flash(flash)
+        // State::<()>::default()
+    };
+    info!("state version: {}", state.version());
+
+    Text::with_alignment(
+        state.version(),
+        Point::new(0, 15),
+        MonoTextStyleBuilder::new()
+            .text_color(Gray4::new(15))
+            .font(&ascii::FONT_4X6)
+            .build(),
+        embedded_graphics::text::Alignment::Left,
+    )
+    .draw(&mut icn)
+    .unwrap();
+    Timer::after_millis(5000).await;
+
+    state.save();
+
+    // let state = State::<()>::default();
+
     let rng = XorShiftRng::from_seed(adc_results);
-    let mut game = Game::new(icn.clone(), rx, 16 * 500, rng);
+    let mut game = Game::new(icn.clone(), rx, 16 * 20, rng, state);
     game.run().await;
     info!("Fin.");
 }
@@ -213,20 +267,108 @@ async fn keys_task(mut keys: impl KeysDevice + 'static, sender: KeysSender) {
     }
 }
 
-pub struct Game {
-    game: LifeGame<25, 16, XorShiftRng>,
-    keys: KeysReceiver,
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Page {
+    #[default]
+    Game,
+    Light,
 }
 
-impl Game {
+const STATE_ADDR: u32 = 1024 * 110;
+const STATE_MAGIC: u64 = 0x1145141919810;
+const STATE_SIZE: usize = 512;
+const VERSION: &str = build_info::format!("v{}-{}", $.crate_info.version, $.version_control.unwrap().git().unwrap().commit_short_id);
+#[repr(C)]
+#[repr(align(1))]
+pub struct State<F> {
+    magic: u64,
+    version: [u8; 64],
+    page: Page,
+    game_brightness: u8,
+    light_brightness: u8,
+    pub flash: Option<F>,
+}
+impl<F> Default for State<F> {
+    fn default() -> Self {
+        let mut version = [b'\0'; 64];
+        version
+            .iter_mut()
+            .zip(VERSION.as_bytes())
+            .for_each(|(a, b)| *a = *b);
+        Self {
+            magic: STATE_MAGIC,
+            version,
+            page: Default::default(),
+            game_brightness: 15,
+            light_brightness: 15,
+            flash: None,
+        }
+    }
+}
+impl<F> State<F> {
+    pub fn version(&self) -> &str {
+        let mut len = 0;
+        for c in self.version.iter() {
+            if *c == b'\0' {
+                break;
+            }
+            len += 1;
+        }
+        core::str::from_utf8(&self.version[..len]).unwrap()
+    }
+}
+impl<F> State<F>
+where
+    F: NorFlash + ReadNorFlash,
+{
+    pub fn default_with_flash(flash: F) -> Self {
+        Self {
+            flash: Some(flash),
+            ..Default::default()
+        }
+    }
+    pub fn default_without_flash(_flash: &F) -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    pub fn save(&mut self) {
+        let mut flash = self.flash.take().unwrap();
+        let mut buf = [0u8; STATE_SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping::<Self>(self as *const _, buf.as_mut_ptr() as *mut _, 1);
+        }
+        defmt::info!("writing magic: {:x}", &buf[..8]);
+        flash.erase(STATE_ADDR, STATE_ADDR + 2048).unwrap();
+        flash.write(STATE_ADDR, &buf).unwrap();
+        let mut delay = Delay {};
+        delay.delay_ms(100);
+        let mut buf = [0u8; 8];
+        // check read magic
+        flash.read(STATE_ADDR, &mut buf).unwrap();
+        // let magic = u64::from_le_bytes(buf);
+        defmt::info!("writtern magic: {:x}", buf);
+        self.flash.replace(flash);
+    }
+}
+
+pub struct Game<F> {
+    game: LifeGame<25, 16, XorShiftRng>,
+    keys: KeysReceiver,
+    state: State<F>,
+}
+
+impl<F> Game<F> {
     pub fn new(
         icn: ICN2037Sender,
         keys: KeysReceiver,
         fade_time_ms: u64,
         rng: XorShiftRng,
+        state: State<F>,
     ) -> Self {
         let game = LifeGame::<25, 16, _>::new(icn, fade_time_ms, rng);
-        Self { game, keys }
+        Self { game, keys, state }
     }
 
     pub async fn run(&mut self) {
