@@ -94,10 +94,6 @@ async fn main(spawner: Spawner) {
     let mut icn = sender;
     icn.clear(Default::default()).unwrap();
 
-    // icn.sender
-    //     .send(icn2037::ICN2037Message::SetBrightness(4))
-    //     .await;
-
     let mut adc = embassy_stm32::adc::Adc::new(p.ADC1, &mut Delay);
     let mut adc_pin = p.PA0;
     let mut adc_results = [0u8; 16];
@@ -145,10 +141,16 @@ async fn main(spawner: Spawner) {
         state = State::default_with_flash(state.flash.take().unwrap());
     }
 
+    let title_brightness = state.game_brightness.max(state.light_brightness);
+    defmt::info!("title brightness: {}", title_brightness);
+
+    icn.sender
+        .send(icn2037::ICN2037Message::SetBrightness(title_brightness))
+        .await;
+
     // TEXT:
     // Life Game 2024
     // Chiro SW  0422
-    // v0.1.0-5c55912
     let title = "Life Game";
     let subtitle = "Chiro SW";
     let title2 = "MK HANS GREAT";
@@ -197,6 +199,10 @@ async fn main(spawner: Spawner) {
         }
         Timer::after_millis(80 * 5).await;
     }
+
+    icn.sender
+        .send(icn2037::ICN2037Message::SetBrightness(15))
+        .await;
 
     state.save().await;
 
@@ -450,6 +456,7 @@ where
                                 speed_idx = (speed_idx + 1) % speed_list.len();
                                 self.state.fade_time_ms = speed_list[speed_idx];
                                 self.game.set_fade_time(self.state.fade_time_ms);
+                                self.state.save().await;
                             }
                         }
                         _ => {}
